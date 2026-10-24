@@ -7,12 +7,12 @@
     "#evals/*": "./evals/*"
   },
   "scripts": {
-    "build": "eve build",
-    "deploy": "eve deploy",
-    "dev": "eve dev",
-    "eval": "eve eval",
-    "start": "eve start",
-    "typecheck": "tsc"
+    "build": "bun node_modules/eve/bin/eve.js build",
+    "deploy": "bun node_modules/eve/bin/eve.js deploy",
+    "dev": "bun scripts/dev.ts",
+    "eval": "bun node_modules/eve/bin/eve.js eval",
+    "start": "bun node_modules/eve/bin/eve.js start",
+    "typecheck": "bun node_modules/typescript/bin/tsc"
   },
   "dependencies": {
     "@vercel/connect": "2.5.2",

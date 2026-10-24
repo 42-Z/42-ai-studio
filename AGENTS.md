@@ -14,22 +14,27 @@
 - **Видео** — Remotion: агент пишет композицию, рендерит через `@remotion/renderer` или CLI прямо в песочнице. Формат, длина и разрешение задаются задачей, в коде нет зашитого дефолта. В образе песочницы нужны Chromium и ffmpeg.
 - **Озвучка** — инструмент агента на Edge TTS. `@andresaya/edge-tts` работает в Node и Bun, отдаёт MP3/WebM и word boundaries для субтитров; лицензия GPL-3.0, учитывать при распространении кода.
 - **Хранилище** — любое S3-совместимое, провайдер не закреплён. Используем нативный клиент Bun (`Bun.s3`), настройки из `S3_*`, presigned URL на загрузку и скачивание.
-- **База** — внешний Postgres, провайдер не закреплён. Схема и миграции лежат в репозитории. `Bun.sql` работает только в Bun, поэтому код, общий с eve-сервисом на Node, не должен от него зависеть.
+- **База** — внешний Postgres, провайдер не закреплён. Схема и миграции лежат в репозитории. `Bun.sql` работает только в Bun: локальный запуск и self-host идут на Bun, но на Vercel eve собирается под Node, поэтому общий код не должен зависеть от `Bun.sql`.
 - **Фронтенд** — React на Bun: `Bun.serve` с HTML-импортами и HMR в dev, `bun build --target=bun --production` в прод. Tailwind подключается через `bun-plugin-tailwind`. shadcn/ui ставится вручную, без Vite и Next.js; Watermelon UI — через shadcn-реестр; Base UI — примитивы без стилей.
 - **Авторизация** — Telegram Login по OIDC: Authorization Code Flow с PKCE, `state` и `nonce`, проверка `id_token` по JWKS (`iss`, `aud`, `exp`) на сервере, сессия в HttpOnly-cookie. URL регистрируются в BotFather; отдельного `userinfo` у Telegram нет, COOP должен разрешать попапы.
 - **Результат** — готовое видео можно посмотреть на сайте и скачать.
 
 ## Стек
 
-TypeScript (ESM), Bun для фронтенда и скриптов, Node 24 для рантайма eve, внешний Postgres, S3-совместимое хранилище. Площадку деплоя не фиксируем.
+TypeScript (ESM), Bun 1.4+ для eve, фронтенда и скриптов, внешний Postgres, S3-совместимое хранилище. Площадку деплоя не фиксируем.
+
+eve запускается через Bun: CLI вызывается как `bun node_modules/eve/bin/eve.js ...`, а `eve start` спавнит собранный output через `process.execPath`, то есть через Bun. При сборке под Bun Nitro выбирает preset `bun`.
 
 ```sh
-bun run dev        # локальная TUI-сессия с агентом
-bun run typecheck  # tsc
+bun run dev        # сборка и запуск агента на Bun, пересборка при изменениях
 bun run build      # сборка агента
+bun run start      # запуск собранного агента на Bun
+bun run typecheck  # tsc под Bun
 bun run eval       # прогон evals
 bun run deploy     # деплой агента
 ```
+
+`eve dev` не используется: в официальной eve 0.83.0 dev-сервер Nitro жёстко подключает `crossws/adapters/node`, который под Bun отказывается работать, а preload с `file://`-URL не переживает пробел и кириллицу в пути. Это upstream-ограничения; код библиотеки не патчим. `bun run dev` собирает агент и запускает его через `eve start` под Bun.
 
 ## Карта репозитория
 
@@ -37,6 +42,7 @@ bun run deploy     # деплой агента
 - `agent/instructions.md` — системный промпт: личность, задачи, тон агента.
 - `agent/channels/` — точки входа (eve-канал с `localDev`, `placeholderAuth`, `vercelOidc`).
 - `agent/lib/` — общий код для authored-модулей.
+- `scripts/dev.ts` — Bun-цикл разработки: `eve build --skip-sandbox-prewarm` и `eve start`, пересборка при изменениях в `agent/`.
 - `.agents/skills/` — навыки в формате Agent Skills, которые используют агенты-разработчики в этом репозитории; `skills-lock.json` фиксирует их источники и хеши. Не путать: рантайм-навыки самого eve-агента живут в `agent/skills/`.
 - `node_modules/eve/docs/` — документация фреймворка, роутер задач — `docs/README.md`.
 - `evals/` — scored-проверки поведения: файлы `*.eval.ts` плюс обязательный `evals.config.ts`. Директория пока не создана.
@@ -100,7 +106,7 @@ API этих проектов меняются, поэтому сверяйся 
 
 ## Деплой
 
-Площадку не фиксируем. eve собирается в Node-сервер (`.output/`) при self-host или в `.vercel/output` на Vercel. Фронтенд на Bun — отдельный сервис: если он и агент живут на разных origin, передавай `host` в `useEveAgent` и авторизационные заголовки. Команды `eve link` и `eve deploy` нужны только при выборе Vercel.
+Площадку не фиксируем. При self-host `eve build` под Bun собирает Nitro-сервер в `.output/` с preset `bun`; `eve start` запускает его через Bun. На Vercel eve выбирает preset `vercel` и пишет `.vercel/output`. Фронтенд на Bun — отдельный сервис: если он и агент живут на разных origin, передавай `host` в `useEveAgent` и авторизационные заголовки. Команды `eve link` и `eve deploy` нужны только при выборе Vercel.
 
 Если setup сообщает, что нужен `eve link`, — выполни и повтори продолжение. При `deploymentRequired: true` в завершающем событии выполни указанную команду `next`.
 
