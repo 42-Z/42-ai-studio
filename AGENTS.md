@@ -20,7 +20,7 @@ bun run deploy     # деплой на Vercel
 - `agent/instructions.md` — системный промпт: личность, задачи, тон агента.
 - `agent/channels/` — точки входа (eve-канал с `localDev`, `placeholderAuth`, `vercelOidc`).
 - `agent/lib/` — общий код для authored-модулей.
-- `.agents/skills/` — навыки для агентов-разработчиков (Claude Code, OpenCode). Не путать: рантайм-навыки самого eve-агента живут в `agent/skills/`.
+- `.agents/skills/` — навыки в формате Agent Skills, которые используют агенты-разработчики в этом репозитории; `skills-lock.json` фиксирует их источники и хеши. Не путать: рантайм-навыки самого eve-агента живут в `agent/skills/`.
 - `node_modules/eve/docs/` — документация фреймворка, роутер задач — `docs/README.md`.
 - `evals/` — scored-проверки поведения: файлы `*.eval.ts` плюс обязательный `evals.config.ts`. Директория пока не создана.
 
