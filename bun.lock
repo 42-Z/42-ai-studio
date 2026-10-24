@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "my-agent",
+      "name": "42-ai-studio",
       "dependencies": {
         "@vercel/connect": "2.5.2",
         "ai": "^7.0.137",
