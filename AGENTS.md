@@ -2,6 +2,10 @@
 
 Агент на [eve](https://eve.dev) — фреймворке Vercel для агентов из файлов. Код приложения — это директория `agent/`: инструкции, инструменты, навыки, каналы, субагенты, расписания. eve компилирует её в HTTP-сервис с сессиями и стримингом.
 
+## Проект
+
+Сайт для создания видео с помощью ИИ на базе LLM. Агент-видеограф работает с Remotion: пишет и правит видеокомпозиции, рендерит ролики. Все команды агента выполняются в песочнице Daytona. Интерфейс — React на shadcn/ui, Watermelon UI и Base UI.
+
 ## Стек
 
 TypeScript (ESM), Bun для скриптов, Node 24 в проде, деплой на Vercel.
@@ -56,6 +60,9 @@ eve add <item> --non-interactive
 - Daytona, песочницы — https://www.daytona.io/docs/.
 - shadcn/ui — https://ui.shadcn.com/docs.
 - Neon, Postgres — https://neon.com/docs.
+- Remotion — https://www.remotion.dev/docs.
+- Base UI — https://base-ui.com.
+- Watermelon UI — https://ui.watermelon.sh.
 
 API этих проектов меняются, поэтому сверяйся с сайтом, а не с памятью.
 
