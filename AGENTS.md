@@ -1,55 +1,71 @@
-# eve Agent App
+# 42 AI Studio
 
-This project uses the eve framework: an agent is a directory of files under `agent/`, and eve compiles and runs it.
+Агент на [eve](https://eve.dev) — фреймворке Vercel для агентов из файлов. Код приложения — это директория `agent/`: инструкции, инструменты, навыки, каналы, субагенты, расписания. eve компилирует её в HTTP-сервис с сессиями и стримингом.
 
-For a content-only change to the root agent's identity, purpose, tone, or response guidelines, edit its existing authored instructions. Fresh projects use `agent/instructions.md`; a project may instead use `agent/instructions.ts` or files under `agent/instructions/`. You do not need to read the framework docs for a content-only instructions change. A fresh project already has its selected model in `agent/agent.ts`; preserve that file unless the user asks to change the model.
+## Стек
 
-## Read the docs before writing code
+TypeScript (ESM), Bun для скриптов, Node 24 в проде, деплой на Vercel.
 
 ```sh
-ls node_modules/eve/docs
+bun run dev        # локальная TUI-сессия с агентом
+bun run typecheck  # tsc
+bun run build      # сборка агента
+bun run eval       # прогон evals
+bun run deploy     # деплой на Vercel
 ```
 
-Start with `docs/README.md`: it maps each task to the page that covers it. Read that page before authoring tools, connections, channels, skills, subagents, schedules, or deployment. In a workspace or local package install, resolve the installed `eve` package location first. If the package docs are missing, use https://eve.dev/docs.
+## Карта репозитория
 
-Use a bounded authoring loop:
+- `agent/agent.ts` — модель, reasoning и прочий рантайм-конфиг.
+- `agent/instructions.md` — системный промпт: личность, задачи, тон агента.
+- `agent/channels/` — точки входа (eve-канал с `localDev`, `placeholderAuth`, `vercelOidc`).
+- `agent/lib/` — общий код для authored-модулей.
+- `.agents/skills/` — навыки для агентов-разработчиков (Claude Code, OpenCode). Не путать: рантайм-навыки самого eve-агента живут в `agent/skills/`.
+- `node_modules/eve/docs/` — документация фреймворка, роутер задач — `docs/README.md`.
+- `evals/` — scored-проверки поведения: файлы `*.eval.ts` плюс обязательный `evals.config.ts`. Директория пока не создана.
 
-1. Read the relevant page and inspect only files you will modify or need to imitate.
-2. Stop discovery once the file location, imports, and definition shape are clear. Implement the smallest complete behavior the user requested.
-3. Run one narrow verification. Expand investigation only when it fails or the request needs project-specific details.
+## Перед написанием кода — документация
 
-Follow links or inspect public types only when the routed page leaves the task unanswered. Do not recursively glob `node_modules`, enumerate the entire docs tree, or read unrelated scaffold files when the direct path is known. Package-manager links can hide files from recursive glob tools even though direct reads work.
+Начинай с `node_modules/eve/docs/README.md`: там таблица «задача → страница». Читай страницу целиком, прежде чем писать инструмент, соединение, канал, навык, субагент, расписание или деплой. Если пакетных доков нет — https://eve.dev/docs.
 
-## Prefer an existing integration
+Цикл ограниченный: прочитать нужную страницу → открыть только те файлы, которые будешь менять или повторять → реализовать минимальное полное поведение → одна узкая проверка. Расширяй поиск, только если проверка упала или задача требует деталей проекта.
 
-When a task names an external product or service, search the registry before implementing its integration. For a generic capability, author a tool instead.
+Модель меняется через `eve set model <provider/model>`; `agent/agent.ts` правится вручную, только когда нужны не покрытые CLI настройки.
+
+## Готовые интеграции вместо своих
+
+Если задача называет внешний сервис (Slack, Linear, GitHub, Notion, база, платёжка), сначала ищи готовую интеграцию:
 
 ```sh
 eve registry search <query> --json
 eve registry view <item>
-```
-
-Prefer items whose `implementation` is `native`; use Chat SDK adapters when no native channel fits. `registry view` links the item's documentation.
-
-Install without driving interactive prompts:
-
-```sh
 eve add <item> --non-interactive
 ```
 
-Exit code 0 means setup completed, 1 failed, and 2 needs an answer or a prerequisite. On exit 2, run the `next.command` from the final NDJSON event. For a non-secret question, replace its `<JSON value>` answer placeholder with the answer you collected; string values need JSON quotes. Never pass a secret in `--answer`. See `docs/install-integrations.mdx` for setup prerequisites.
+`native`-реализации предпочтительнее Chat SDK-адаптеров. Код выхода `eve add`: 0 — успех, 1 — ошибка, 2 — нужен ответ или предварительное условие; во втором случае выполни `next.command` из последнего NDJSON-события. Секреты в `--answer` не передавай. Свой инструмент пиши, когда готовой интеграции нет или нужна собственная логика.
 
-## Use eve for Vercel operations
+## Правила кода
 
-Use eve to link and deploy Vercel projects:
+- Инструмент — файл `agent/tools/<name>.ts` с `defineTool`: имя инструмента для модели берётся из имени файла. Обязательны `description` (что делает и когда вызывать) и `inputSchema` (Zod); `execute` может быть синхронным, асинхронным или async-генератором.
+- Что возвращает инструмент — типизируй через `outputSchema`, если модель должна видеть структуру.
+- Инструкции меняются в `agent/instructions.md`. Это контентная правка, доки читать не нужно. Модель в `agent.ts` без просьбы пользователя не трогай.
+- Импорты внутри проекта — через `#*` → `agent/*` (см. `package.json`).
+- Секреты только в `.env*`; они в `.gitignore` и `.vercelignore`.
+- Перед деплоем проверь `agent/channels/eve.ts`: `placeholderAuth()` в проде не пускает браузерные запросы, для публичного доступа нужен реальный провайдер авторизации или `none()`.
+
+## Проверка
+
+Достаточно самой узкой проверки, которая подтверждает изменённое поведение: `bun run typecheck` для типов, `bun run build` для ошибок дискавери и компиляции, `bun run eval` для поведения агента. Полный набор проверок на каждую мелочь не гоняй.
+
+## Деплой
 
 ```sh
-eve link --non-interactive --project <name-or-id> [--team <team-id-or-slug>]
-eve deploy --non-interactive --yes [--project <name-or-id>]
+eve link --non-interactive --project <name-or-id>
+eve deploy --non-interactive --yes
 ```
 
-A setup may report `eve link` as a prerequisite; run it, then retry the continuation. When a completed setup event has `deploymentRequired: true`, run the `next` command it reports.
+Если setup сообщает, что нужен `eve link`, — выполни и повтори продолжение. При `deploymentRequired: true` в завершающем событии выполни указанную команду `next`.
 
-## Validate the change
+## Git
 
-Run the validation the task requests. When it does not establish the behavior you changed, run the narrowest relevant check.
+Ветка `main` — рабочая, удалённый репозиторий `42-Z/42-ai-studio`. Перед новой веткой подтяни `main`.
