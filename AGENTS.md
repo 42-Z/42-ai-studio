@@ -1,115 +1,137 @@
 # 42 AI Studio
 
-Агент на [eve](https://eve.dev) — фреймворке Vercel для агентов из файлов. Код приложения — это директория `agent/`: инструкции, инструменты, навыки, каналы, субагенты, расписания. eve компилирует её в HTTP-сервис с сессиями и стримингом.
-
-## Проект
-
-Сайт для создания видео с помощью ИИ на базе LLM. Пользователь ставит задачу, агент-видеограф делает всё сам: собирает Remotion-композицию, озвучивает, рендерит и отдаёт готовый ролик. Пользователь только смотрит и скачивает результат. Интерфейс и видео поддерживают русский язык.
+Сайт для создания видео с помощью ИИ. Пользователь ставит задачу, агент-видеограф собирает Remotion-композицию, озвучивает, рендерит и отдаёт готовый ролик. Интерфейс и видео поддерживают русский язык.
 
 ## Архитектура
 
-- **Агент** — eve, полностью автономный. Модель подключается через OpenAI-совместимый провайдер (`@ai-sdk/openai-compatible` в `agent/agent.ts`); модель и reasoning фиксированы на сервере, пользователь их не выбирает.
-- **Песочница** — Daytona через собственный провайдер eve (`defineSandboxProvider`). Своя песочница у каждого агента и каждой сессии. Штатные провайдеры eve — Vercel, Docker и just-bash, поэтому Daytona требует authored-провайдера.
-- **Файлы пользователя** — загружаются напрямую в S3 по presigned URL и попадают в песочницу; тип файла не ограничен.
-- **Видео** — Remotion: агент пишет композицию, рендерит через `@remotion/renderer` или CLI прямо в песочнице. Формат, длина и разрешение задаются задачей, в коде нет зашитого дефолта. В образе песочницы нужны Chromium и ffmpeg.
-- **Озвучка** — инструмент агента на Edge TTS. `@andresaya/edge-tts` работает в Node и Bun, отдаёт MP3/WebM и word boundaries для субтитров; лицензия GPL-3.0, учитывать при распространении кода.
-- **Хранилище** — любое S3-совместимое, провайдер не закреплён. Используем нативный клиент Bun (`Bun.s3`), настройки из `S3_*`, presigned URL на загрузку и скачивание.
-- **База** — внешний Postgres, провайдер не закреплён. Схема и миграции лежат в репозитории. `Bun.sql` работает только в Bun: локальный запуск и self-host идут на Bun, но на Vercel eve собирается под Node, поэтому общий код не должен зависеть от `Bun.sql`.
-- **Фронтенд** — React на Bun: `Bun.serve` с HTML-импортами и HMR в dev, `bun build --target=bun --production` в прод. Tailwind подключается через `bun-plugin-tailwind`. shadcn/ui ставится вручную, без Vite и Next.js; Watermelon UI — через shadcn-реестр; Base UI — примитивы без стилей.
-- **Авторизация** — Telegram Login по OIDC: Authorization Code Flow с PKCE, `state` и `nonce`, проверка `id_token` по JWKS (`iss`, `aud`, `exp`) на сервере, сессия в HttpOnly-cookie. URL регистрируются в BotFather; отдельного `userinfo` у Telegram нет, COOP должен разрешать попапы.
-- **Результат** — готовое видео можно посмотреть на сайте и скачать.
+Один root-агент eve и Next.js-приложение в одном корневом пакете. Next.js смонтирован с агентом через `withEve()` из `eve/next`.
+
+```text
+42-ai-studio/
+├── package.json
+├── package-lock.json
+├── next.config.ts
+├── tsconfig.json
+├── app/                    # Next.js App Router
+├── components/
+├── lib/
+├── public/
+├── agent/                  # единственный root-агент
+│   ├── agent.ts
+│   ├── instructions.md
+│   ├── channels/
+│   ├── tools/
+│   ├── skills/
+│   ├── subagents/
+│   └── lib/
+├── evals/
+├── .agents/skills/
+└── AGENTS.md
+```
+
+- `agent/` — единственный агент; не создавать `agents/`, пока не появится второй отдельно адресуемый агент.
+- Браузерный код держать вне `agent/`.
+- Фронтенд и агент живут в одном корневом пакете.
+- Не выносить фронтенд в отдельный пакет `web/` или `apps/web/`.
+- Не делать ручной прокси `/eve`, если `withEve()` уже смонтировал агент.
 
 ## Стек
 
-TypeScript (ESM), Bun 1.4+ для eve, фронтенда и скриптов, внешний Postgres, S3-совместимое хранилище. Площадку деплоя не фиксируем.
+- Node.js 24.x
+- npm — один `package-lock.json` и один `node_modules`
+- Next.js 16.4.3
+- React 19
+- TypeScript 5
+- eve 0.83.0
+- Base UI — примитивы без стилей
 
-eve запускается через Bun: CLI вызывается как `bun node_modules/eve/bin/eve.js ...`, а `eve start` спавнит собранный output через `process.execPath`, то есть через Bun. При сборке под Bun Nitro выбирает preset `bun`.
-
-```sh
-bun run dev        # сборка и запуск агента на Bun, пересборка при изменениях
-bun run build      # сборка агента
-bun run start      # запуск собранного агента на Bun
-bun run typecheck  # tsc под Bun
-bun run eval       # прогон evals
-bun run deploy     # деплой агента
-```
-
-`eve dev` не используется: в официальной eve 0.83.0 dev-сервер Nitro жёстко подключает `crossws/adapters/node`, который под Bun отказывается работать, а preload с `file://`-URL не переживает пробел и кириллицу в пути. Это upstream-ограничения; код библиотеки не патчим. `bun run dev` собирает агент и запускает его через `eve start` под Bun.
-
-## Карта репозитория
-
-- `agent/agent.ts` — модель, reasoning и прочий рантайм-конфиг.
-- `agent/instructions.md` — системный промпт: личность, задачи, тон агента.
-- `agent/channels/` — точки входа (eve-канал с `localDev`, `placeholderAuth`, `vercelOidc`).
-- `agent/lib/` — общий код для authored-модулей.
-- `scripts/dev.ts` — Bun-цикл разработки: `eve build --skip-sandbox-prewarm` и `eve start`, пересборка при изменениях в `agent/`.
-- `.agents/skills/` — навыки в формате Agent Skills, которые используют агенты-разработчики в этом репозитории; `skills-lock.json` фиксирует их источники и хеши. Не путать: рантайм-навыки самого eve-агента живут в `agent/skills/`.
-- `node_modules/eve/docs/` — документация фреймворка, роутер задач — `docs/README.md`.
-- `evals/` — scored-проверки поведения: файлы `*.eval.ts` плюс обязательный `evals.config.ts`. Директория пока не создана.
-
-## Перед написанием кода — документация
-
-Начинай с `node_modules/eve/docs/README.md`: там таблица «задача → страница». Читай страницу целиком, прежде чем писать инструмент, соединение, канал, навык, субагент, расписание или деплой. Если пакетных доков нет — бери документацию с сайта из раздела ниже.
-
-Цикл ограниченный: прочитать нужную страницу → открыть только те файлы, которые будешь менять или повторять → реализовать минимальное полное поведение → одна узкая проверка. Расширяй поиск, только если проверка упала или задача требует деталей проекта.
-
-Модель задаётся в `agent/agent.ts` через OpenAI-совместимый провайдер, а не через AI Gateway и не через `eve set model`. Пользователь модель и reasoning не выбирает.
-
-## Готовые интеграции вместо своих
-
-Если задача называет внешний сервис (Slack, Linear, GitHub, Notion, база, платёжка), сначала ищи готовую интеграцию:
+## Команды
 
 ```sh
-eve registry search <query> --json
-eve registry view <item>
-eve add <item> --non-interactive
+npm run dev        # next dev; withEve поднимает eve
+npm run build      # eve build && next build
+npm start          # next start
+npm run typecheck  # tsc --noEmit
 ```
 
-`native`-реализации предпочтительнее Chat SDK-адаптеров. Код выхода `eve add`: 0 — успех, 1 — ошибка, 2 — нужен ответ или предварительное условие; во втором случае выполни `next.command` из последнего NDJSON-события. Секреты в `--answer` не передавай. Свой инструмент пиши, когда готовой интеграции нет или нужна собственная логика.
+Нативные команды eve: `eve dev`, `eve build`, `eve start`, `eve info`, `eve eval`, `eve deploy`.
 
-## Рабочие правила
+## Интеграция
 
-- Вывод команд читай целиком. Обрезать его через `head`, `tail`, `sed -n`, `awk 'NR<=…'` или пайпы в них запрещено: потерянная строка с ошибкой дороже сэкономленных токенов. Большой вывод инструмент сам сокращает до превью и сохраняет полный текст в файл — нужный диапазон читай уже из этого файла.
-- Временные скрипты, дампы и одноразовые файлы держи в системной временной директории (`$TMPDIR` или `/tmp`), а не в репозитории. В проекте остаётся только код, который живёт дальше.
+`withEve()` в `next.config.ts` монтирует агент в Next.js. Браузер работает same-origin; `useEveAgent()` не должен получать `host`, пока фронтенд и агент не разнесены осознанно.
 
-## Документация
+## Фронтенд
 
-- eve — https://eve.dev/docs, локальная копия — `node_modules/eve/docs`.
-- Bun — https://bun.com/docs; fullstack-сервер — https://bun.com/docs/bundler/fullstack, S3 — https://bun.com/docs/runtime/s3.
-- Daytona — https://www.daytona.io/docs/, выполнение команд — https://www.daytona.io/docs/en/process-code-execution.
-- Telegram Login — https://core.telegram.org/widgets/login.
-- shadcn/ui — https://ui.shadcn.com/docs, ручная установка — https://ui.shadcn.com/docs/installation/manual.
-- Watermelon UI — https://ui.watermelon.sh, CLI — https://ui.watermelon.sh/cli.
-- Base UI — https://base-ui.com.
-- Remotion — https://www.remotion.dev/docs, лицензия — https://www.remotion.dev/docs/license/pricing.
-- Neon, Postgres — https://neon.com/docs.
+- `useEveAgent()` из `eve/react` в клиентских компонентах.
+- Маршруты: `/`, `/s`, `/s/[sessionId]`.
+- `/s/[sessionId]` восстанавливает durable-сессию через `initialSession` и `resume: true`.
+- После создания сессии обновлять URL, не размонтируя активный стрим.
+- Рендерить текст, reasoning, инструменты, файлы и HITL.
+- Подпись инструмента брать из `part.toolMetadata?.eve?.label`.
+- Видео — `<video controls>`, изображения — `<img>`, остальные файлы — ссылка на скачивание.
+- Ожидающие вопросы и подтверждения — через `openConversationInputs(agent.data)` и `agent.respond()`.
 
-API этих проектов меняются, поэтому сверяйся с сайтом, а не с памятью.
+## Авторизация
 
-## Правила кода
+- Eve channel закрыт по умолчанию; для production-браузера нужен `agent/channels/eve.ts` с AuthFn.
+- Telegram Login по OIDC: Authorization Code Flow + PKCE, `state`, `nonce`.
+- `id_token` проверять на сервере по JWKS: `iss`, `aud`, `exp`.
+- Сессия — HttpOnly, Secure, SameSite=Lax cookie.
+- Next.js принимает callback и ставит cookie; eve channel проверяет ту же сессию.
+- `localDev()` — только локально; `placeholderAuth()` не должен пускать production.
+- COOP должен разрешать попапы Telegram.
+- Не доверять callback без серверной проверки.
+- Секреты хранить только в `.env*`; в клиентский бандл они не попадают.
 
-- Инструмент — файл `agent/tools/<name>.ts` с `defineTool`: имя инструмента для модели берётся из имени файла. Обязательны `description` (что делает и когда вызывать) и `inputSchema` (Zod); `execute` может быть синхронным, асинхронным или async-генератором.
-- Что возвращает инструмент — типизируй через `outputSchema`, если модель должна видеть структуру.
-- Инструкции меняются в `agent/instructions.md`. Это контентная правка, доки читать не нужно. Модель в `agent.ts` без просьбы пользователя не трогай.
-- Импорты внутри проекта — через `#*` → `agent/*` (см. `package.json`).
-- Секреты только в `.env*`; они в `.gitignore` и `.vercelignore`.
-- Перед деплоем проверь `agent/channels/eve.ts`: `placeholderAuth()` в проде не пускает браузерные запросы, для публичного доступа нужен реальный провайдер авторизации или `none()`.
-- Фронтенд собирается и работает на Bun. Не добавляй Vite, Next.js и другие фреймворки: `Bun.serve` с HTML-импортами сам бандлит React, TypeScript и CSS. shadcn/ui подключай по инструкции для ручной установки, компоненты Watermelon — через shadcn-реестр.
-- Формат видео, S3-провайдер и Postgres-провайдер не зашиты в код. Формат берётся из задачи, остальное — из переменных окружения.
-- Все команды агента и рендер Remotion выполняются в песочнице Daytona, а не в рантайме приложения.
-- Авторизацию Telegram проверяй только на сервере: валидируй `id_token` по JWKS и проверяй `iss`, `aud`, `exp`, `state` и `nonce`. Данные из callback без проверки не доверяй. Сессионная cookie — `HttpOnly`, `Secure`, `SameSite=Lax`.
-- Файлы пользователя принимай через presigned URL и проверяй размер и content type до выдачи ссылки.
+## Агент
+
+- `agent/agent.ts` задаёт модель и reasoning; пользователь их не выбирает.
+- Инструкции, инструменты, навыки и субагенты живут в `agent/`.
+- Daytona — authored-провайдер песочницы; своя песочница у агента и сессии.
+- Файлы пользователя — напрямую в S3 по presigned URL; тип файла не ограничен.
+- S3 — любой S3-совместимый провайдер, Node-совместимый клиент.
+- Postgres — внешний; схема и миграции в репозитории; Node-совместимый клиент.
+- Видео — Remotion в песочнице; Chromium и ffmpeg в образе.
+- Озвучка — Edge TTS; MP3/WebM и word boundaries для субтитров.
+- Готовое видео — в S3; фронтенд получает ссылку на просмотр и скачивание.
+
+## Правила разработки
+
+- Перед изменениями читать `node_modules/eve/docs/README.md` и нужные страницы.
+- Использовать нативные команды eve.
+- Не патчить `node_modules/eve` и не добавлять обходы вместо чтения документации.
+- Браузерный код держать вне `agent/`.
+- Авторизацию проверять только на сервере.
+- Не добавлять npm-скрипты, которые просто переименовывают нативную команду eve.
 
 ## Проверка
 
-Достаточно самой узкой проверки, которая подтверждает изменённое поведение: `bun run typecheck` для типов, `bun run build` для ошибок дискавери и компиляции, `bun run eval` для поведения агента. Полный набор проверок на каждую мелочь не гоняй.
+Достаточно самой узкой проверки, которая подтверждает изменённое поведение:
 
-## Деплой
+- `npm run typecheck`
+- `npm run dev` — страница и `/eve/v1/health` через прокси Next.js
+- `eve info`
+- `eve build`
+- `next build`
+- `next start`
 
-Площадку не фиксируем. При self-host `eve build` под Bun собирает Nitro-сервер в `.output/` с preset `bun`; `eve start` запускает его через Bun. На Vercel eve выбирает preset `vercel` и пишет `.vercel/output`. Фронтенд на Bun — отдельный сервис: если он и агент живут на разных origin, передавай `host` в `useEveAgent` и авторизационные заголовки. Команды `eve link` и `eve deploy` нужны только при выборе Vercel.
+## Документация
 
-Если setup сообщает, что нужен `eve link`, — выполни и повтори продолжение. При `deploymentRequired: true` в завершающем событии выполни указанную команду `next`.
+- eve — https://eve.dev/docs
+- Daytona — https://www.daytona.io/docs/
+- Next.js — https://nextjs.org/docs
+- Base UI — https://base-ui.com
 
-## Git
+## Навыки агента
 
-Ветка `main` — рабочая, удалённый репозиторий `42-Z/42-ai-studio`. Перед новой веткой подтяни `main`.
+### Трекер задач
+
+Задачи и спецификации живут в GitHub Issues репозитория `42-Z/42-ai-studio`; использовать `gh` CLI. См. `docs/agents/issue-tracker.md`.
+
+### Метки triage
+
+Пять стандартных ролей: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. См. `docs/agents/triage-labels.md`.
+
+### Доменные документы
+
+Один контекст: `GLOSSARY.md` в корне и `docs/adr/`. См. `docs/agents/domain.md`.

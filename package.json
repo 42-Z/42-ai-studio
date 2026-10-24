@@ -1,31 +1,40 @@
 {
   "name": "42-ai-studio",
   "version": "0.0.0",
+  "private": true,
   "type": "module",
   "imports": {
     "#*": "./agent/*",
     "#evals/*": "./evals/*"
   },
   "scripts": {
-    "build": "bun node_modules/eve/bin/eve.js build",
-    "deploy": "bun node_modules/eve/bin/eve.js deploy",
-    "dev": "bun scripts/dev.ts",
-    "eval": "bun node_modules/eve/bin/eve.js eval",
-    "start": "bun node_modules/eve/bin/eve.js start",
-    "typecheck": "bun node_modules/typescript/bin/tsc"
+    "dev": "next dev",
+    "dev:agent": "eve dev",
+    "build": "eve build && next build",
+    "build:web": "next build",
+    "build:agent": "eve build",
+    "start": "next start",
+    "start:agent": "eve start",
+    "eval": "eve eval",
+    "deploy": "eve deploy",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@vercel/connect": "2.5.2",
     "ai": "^7.0.137",
     "eve": "^0.83.0",
+    "next": "16.4.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "zod": "4.5.4"
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "typescript": "7.0.2"
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5"
   },
   "engines": {
     "node": "24.x"
   }
-
 }
