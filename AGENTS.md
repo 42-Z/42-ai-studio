@@ -4,30 +4,31 @@
 
 ## Проект
 
-Сайт для создания видео с помощью ИИ на базе LLM. Пользователь ставит задачу, агент-видеограф делает всё сам: собирает Remotion-композицию, озвучивает, рендерит и отдаёт готовый ролик. Пользователь только смотрит и скачивает результат. Интерфейс и видео на русском.
+Сайт для создания видео с помощью ИИ на базе LLM. Пользователь ставит задачу, агент-видеограф делает всё сам: собирает Remotion-композицию, озвучивает, рендерит и отдаёт готовый ролик. Пользователь только смотрит и скачивает результат. Интерфейс и видео поддерживают русский язык.
 
 ## Архитектура
 
-- **Агент** — eve, полностью автономный. Модель подключается через OpenAI-совместимый провайдер; модель и reasoning фиксированы, пользователь их не выбирает.
-- **Песочница** — Daytona через собственный провайдер eve (`defineSandboxProvider`). Своя песочница у каждого агента и каждой сессии.
-- **Файлы пользователя** — загружаются на сайт и доступны агенту в песочнице без ограничений по типу.
-- **Озвучка** — инструмент на Edge TTS.
-- **Хранилище** — S3: исходники, промежуточные файлы и готовые видео.
-- **Фронтенд** — React, сборка на Bun, компоненты shadcn/ui, Watermelon UI и Base UI.
-- **Авторизация** — через Telegram.
-- **База** — внешний Postgres.
+- **Агент** — eve, полностью автономный. Модель подключается через OpenAI-совместимый провайдер (`@ai-sdk/openai-compatible` в `agent/agent.ts`); модель и reasoning фиксированы на сервере, пользователь их не выбирает.
+- **Песочница** — Daytona через собственный провайдер eve (`defineSandboxProvider`). Своя песочница у каждого агента и каждой сессии. Штатные провайдеры eve — Vercel, Docker и just-bash, поэтому Daytona требует authored-провайдера.
+- **Файлы пользователя** — загружаются напрямую в S3 по presigned URL и попадают в песочницу; тип файла не ограничен.
+- **Видео** — Remotion: агент пишет композицию, рендерит через `@remotion/renderer` или CLI прямо в песочнице. Формат, длина и разрешение задаются задачей, в коде нет зашитого дефолта. В образе песочницы нужны Chromium и ffmpeg.
+- **Озвучка** — инструмент агента на Edge TTS. `@andresaya/edge-tts` работает в Node и Bun, отдаёт MP3/WebM и word boundaries для субтитров; лицензия GPL-3.0, учитывать при распространении кода.
+- **Хранилище** — любое S3-совместимое, провайдер не закреплён. Используем нативный клиент Bun (`Bun.s3`), настройки из `S3_*`, presigned URL на загрузку и скачивание.
+- **База** — внешний Postgres, провайдер не закреплён. Схема и миграции лежат в репозитории. `Bun.sql` работает только в Bun, поэтому код, общий с eve-сервисом на Node, не должен от него зависеть.
+- **Фронтенд** — React на Bun: `Bun.serve` с HTML-импортами и HMR в dev, `bun build --target=bun --production` в прод. Tailwind подключается через `bun-plugin-tailwind`. shadcn/ui ставится вручную, без Vite и Next.js; Watermelon UI — через shadcn-реестр; Base UI — примитивы без стилей.
+- **Авторизация** — Telegram Login по OIDC: Authorization Code Flow с PKCE, `state` и `nonce`, проверка `id_token` по JWKS (`iss`, `aud`, `exp`) на сервере, сессия в HttpOnly-cookie. URL регистрируются в BotFather; отдельного `userinfo` у Telegram нет, COOP должен разрешать попапы.
 - **Результат** — готовое видео можно посмотреть на сайте и скачать.
 
 ## Стек
 
-TypeScript (ESM), Bun для скриптов, Node 24 в проде, деплой на Vercel.
+TypeScript (ESM), Bun для фронтенда и скриптов, Node 24 для рантайма eve, внешний Postgres, S3-совместимое хранилище. Площадку деплоя не фиксируем.
 
 ```sh
 bun run dev        # локальная TUI-сессия с агентом
 bun run typecheck  # tsc
 bun run build      # сборка агента
 bun run eval       # прогон evals
-bun run deploy     # деплой на Vercel
+bun run deploy     # деплой агента
 ```
 
 ## Карта репозитория
@@ -46,7 +47,7 @@ bun run deploy     # деплой на Vercel
 
 Цикл ограниченный: прочитать нужную страницу → открыть только те файлы, которые будешь менять или повторять → реализовать минимальное полное поведение → одна узкая проверка. Расширяй поиск, только если проверка упала или задача требует деталей проекта.
 
-Модель меняется через `eve set model <provider/model>`; `agent/agent.ts` правится вручную, только когда нужны не покрытые CLI настройки.
+Модель задаётся в `agent/agent.ts` через OpenAI-совместимый провайдер, а не через AI Gateway и не через `eve set model`. Пользователь модель и reasoning не выбирает.
 
 ## Готовые интеграции вместо своих
 
@@ -68,13 +69,14 @@ eve add <item> --non-interactive
 ## Документация
 
 - eve — https://eve.dev/docs, локальная копия — `node_modules/eve/docs`.
-- Bun — https://bun.com/docs.
-- Daytona, песочницы — https://www.daytona.io/docs/.
-- shadcn/ui — https://ui.shadcn.com/docs.
-- Neon, Postgres — https://neon.com/docs.
-- Remotion — https://www.remotion.dev/docs.
+- Bun — https://bun.com/docs; fullstack-сервер — https://bun.com/docs/bundler/fullstack, S3 — https://bun.com/docs/runtime/s3.
+- Daytona — https://www.daytona.io/docs/, выполнение команд — https://www.daytona.io/docs/en/process-code-execution.
+- Telegram Login — https://core.telegram.org/widgets/login.
+- shadcn/ui — https://ui.shadcn.com/docs, ручная установка — https://ui.shadcn.com/docs/installation/manual.
+- Watermelon UI — https://ui.watermelon.sh, CLI — https://ui.watermelon.sh/cli.
 - Base UI — https://base-ui.com.
-- Watermelon UI — https://ui.watermelon.sh.
+- Remotion — https://www.remotion.dev/docs, лицензия — https://www.remotion.dev/docs/license/pricing.
+- Neon, Postgres — https://neon.com/docs.
 
 API этих проектов меняются, поэтому сверяйся с сайтом, а не с памятью.
 
@@ -86,6 +88,11 @@ API этих проектов меняются, поэтому сверяйся 
 - Импорты внутри проекта — через `#*` → `agent/*` (см. `package.json`).
 - Секреты только в `.env*`; они в `.gitignore` и `.vercelignore`.
 - Перед деплоем проверь `agent/channels/eve.ts`: `placeholderAuth()` в проде не пускает браузерные запросы, для публичного доступа нужен реальный провайдер авторизации или `none()`.
+- Фронтенд собирается и работает на Bun. Не добавляй Vite, Next.js и другие фреймворки: `Bun.serve` с HTML-импортами сам бандлит React, TypeScript и CSS. shadcn/ui подключай по инструкции для ручной установки, компоненты Watermelon — через shadcn-реестр.
+- Формат видео, S3-провайдер и Postgres-провайдер не зашиты в код. Формат берётся из задачи, остальное — из переменных окружения.
+- Все команды агента и рендер Remotion выполняются в песочнице Daytona, а не в рантайме приложения.
+- Авторизацию Telegram проверяй только на сервере: валидируй `id_token` по JWKS и проверяй `iss`, `aud`, `exp`, `state` и `nonce`. Данные из callback без проверки не доверяй. Сессионная cookie — `HttpOnly`, `Secure`, `SameSite=Lax`.
+- Файлы пользователя принимай через presigned URL и проверяй размер и content type до выдачи ссылки.
 
 ## Проверка
 
@@ -93,10 +100,7 @@ API этих проектов меняются, поэтому сверяйся 
 
 ## Деплой
 
-```sh
-eve link --non-interactive --project <name-or-id>
-eve deploy --non-interactive --yes
-```
+Площадку не фиксируем. eve собирается в Node-сервер (`.output/`) при self-host или в `.vercel/output` на Vercel. Фронтенд на Bun — отдельный сервис: если он и агент живут на разных origin, передавай `host` в `useEveAgent` и авторизационные заголовки. Команды `eve link` и `eve deploy` нужны только при выборе Vercel.
 
 Если setup сообщает, что нужен `eve link`, — выполни и повтори продолжение. При `deploymentRequired: true` в завершающем событии выполни указанную команду `next`.
 
