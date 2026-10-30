@@ -1,15 +1,13 @@
-import { ClapperboardIcon } from "lucide-react";
-
 import { cn } from "@/lib/utils";
 
-/** Логотип и название сервиса. */
+/**
+ * Название сервиса. Логотипа пока нет, поэтому иконки-заглушки нет:
+ * бренд остаётся текстовым, пока не появится настоящий знак.
+ */
 export function Brand({ className }: { className?: string }) {
   return (
-    <span className={cn("flex min-w-0 items-center gap-2", className)}>
-      <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
-        <ClapperboardIcon />
-      </span>
-      <span className="truncate font-heading text-sm font-medium">42 AI Studio</span>
+    <span className={cn("block min-w-0 truncate font-heading text-sm font-medium", className)}>
+      42 AI Studio
     </span>
   );
 }
