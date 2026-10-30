@@ -271,12 +271,8 @@ u/<user_id>/s/<app_session_id>/<вид>/<uuid>/<имя файла>
 
 Один контекст: `GLOSSARY.md` в корне и `docs/adr/`. См. `docs/agents/domain.md`.
 
-<!-- BEGIN:nextjs-agent-rules -->
+## Next.js в этом проекте — не тот, что вы знаете
 
-## This is NOT the Next.js you know
+В этой версии есть ломающие изменения: API, соглашения и структура файлов могут отличаться от обучающих данных. Перед написанием кода прочитайте нужный раздел встроенной документации в `node_modules/next/dist/docs/` (путь разрешается от каталога этого файла; в монорепозитории пакет `next` может быть не виден из корня проекта) и учитывайте предупреждения об устаревании.
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
-
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
-
-<!-- END:nextjs-agent-rules -->
+Этот блок обычно дописывает `next dev` на английском и перезаписывает его при каждом запуске. Автогенерация отключена через `agentRules: false` в `next.config.ts`, чтобы правила оставались на русском; исходный генератор — `node_modules/next/dist/server/lib/generate-agent-files.js`.

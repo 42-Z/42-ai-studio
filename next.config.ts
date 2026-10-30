@@ -13,6 +13,10 @@ const distDir = readNextDistDir();
 
 const nextConfig: NextConfig = {
   distDir,
+  // Встроенный блок правил Next.js для агентов англоязычный, и `next dev`
+  // перезаписывает им AGENTS.md. Правила переведены на русский, поэтому
+  // автогенерация блока отключена.
+  agentRules: false,
   // Next.js дописывает пути типов своего distDir в include tsconfig. Экземпляры
   // тестов со своим distDir работают с отдельным tsconfig, который создаёт
   // `startApp` (`<distDir>.tsconfig.json`, расширяет корневой), иначе каждый
