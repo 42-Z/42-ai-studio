@@ -3,10 +3,11 @@
  * счётчики журнала миграций. Правило безопасности: тесты работают только
  * с базой, имя которой оканчивается на `_test`.
  */
+import { loadConfig } from "../../../lib/config";
 import { getDb, getSqlClient, type Database } from "../../../lib/db/client";
 import { users, type User } from "../../../lib/db/schema";
 
-/** Клиент Drizzle к тестовой базе (одно подключение на процесс). */
+/** Клиент Drizzle к тестовой базе (клиент приложения, один на процесс воркера). */
 export function db(): Database {
   return getDb();
 }
@@ -36,6 +37,7 @@ export function assertTestDatabaseName(databaseUrl: string): void {
  * автоматически перед каждым тестовым файлом.
  */
 export async function resetDatabase(): Promise<void> {
+  assertTestDatabaseName(loadConfig().databaseUrl);
   const client = getSqlClient();
   const tables = (await client`
     select tablename from pg_tables

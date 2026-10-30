@@ -1,6 +1,11 @@
 /**
- * Клиент Drizzle к Postgres: одно подключение на процесс, создаётся лениво.
+ * Клиент Drizzle к Postgres: один пул на процесс, создаётся лениво.
  * Строка подключения приходит из модуля конфигурации, `process.env` здесь нет.
+ *
+ * Пул postgres.js по умолчанию (до 10 соединений): `sql.begin` занимает
+ * соединение на всё время транзакции, и при одном соединении запрос вне её
+ * из колбэка ждал бы бесконечно. В dev клиент живёт на `globalThis`, иначе
+ * горячая перезагрузка Next.js плодит новые пулы.
  */
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -10,27 +15,37 @@ import * as schema from "./schema";
 
 export type Database = PostgresJsDatabase<typeof schema>;
 
-let sql: postgres.Sql | undefined;
-let database: Database | undefined;
+interface DbState {
+  sql: postgres.Sql;
+  database: Database;
+}
+
+const globalForDb = globalThis as typeof globalThis & { __studioDb?: DbState };
+
+let state: DbState | undefined = globalForDb.__studioDb;
+
+function ensureState(): DbState {
+  if (state === undefined) {
+    const sql = postgres(loadConfig().databaseUrl);
+    state = { sql, database: drizzle(sql, { schema }) };
+    if (process.env.NODE_ENV !== "production") globalForDb.__studioDb = state;
+  }
+  return state;
+}
 
 export function getDb(): Database {
-  if (database === undefined) {
-    sql = postgres(loadConfig().databaseUrl, { max: 1 });
-    database = drizzle(sql, { schema });
-  }
-  return database;
+  return ensureState().database;
 }
 
-/** Открытое подключение процесса (для разовых запросов обвязки). */
+/** Пул процесса (для разовых запросов обвязки). */
 export function getSqlClient(): postgres.Sql {
-  getDb();
-  return sql as postgres.Sql;
+  return ensureState().sql;
 }
 
-/** Закрывает подключение процесса. */
+/** Закрывает пул процесса. */
 export async function closeDb(): Promise<void> {
-  const current = sql;
-  sql = undefined;
-  database = undefined;
-  if (current !== undefined) await current.end();
+  const current = state;
+  state = undefined;
+  delete globalForDb.__studioDb;
+  if (current !== undefined) await current.sql.end();
 }

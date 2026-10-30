@@ -8,6 +8,8 @@ export default defineConfig({
   test: {
     include: ["tests/http/**/*.test.ts"],
     globalSetup: ["tests/http/global-setup.ts"],
+    // Перед каждым файлом: resetDatabase() и очистка бакета.
+    setupFiles: ["tests/http/setup.ts"],
     // resetDatabase() перед каждым файлом требует последовательного прогона.
     fileParallelism: false,
     // Холодный старт next dev вместе с eve занимает до 180 с.

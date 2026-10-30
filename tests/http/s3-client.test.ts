@@ -63,3 +63,45 @@ describe("клиент S3", () => {
     await storage.deletePrefix(PREFIX);
   });
 });
+
+describe("совместимость со строгими провайдерами", () => {
+  test("ссылка на загрузку без контрольной суммы и с подписанным content-type", async () => {
+    const url = await getStorage().presignUpload(KEY, "image/png", { expiresIn: 300 });
+
+    expect(url).not.toMatch(/checksum/i);
+    expect(new URL(url).searchParams.get("X-Amz-SignedHeaders")).toBe("content-type;host");
+  });
+
+  test("PUT с другим Content-Type отвергается", async () => {
+    const url = await getStorage().presignUpload(KEY, "image/png", { expiresIn: 300 });
+    const upload = await fetch(url, {
+      method: "PUT",
+      body: new Uint8Array([1]),
+      headers: { "content-type": "text/plain" },
+      redirect: "manual",
+    });
+
+    expect(upload.status).toBe(403);
+    expect(await getStorage().objectExists(KEY)).toBe(false);
+  });
+
+  test("имя для скачивания передаётся по RFC 6266", async () => {
+    const storage = getStorage();
+    const name = 'Отчёт "итог".pdf';
+    await storage.putObject(KEY, new Uint8Array([1, 2]), "application/pdf");
+
+    const response = await fetch(await storage.presignRead(KEY, { downloadName: name }), {
+      redirect: "manual",
+    });
+    const header = response.headers.get("content-disposition") ?? "";
+    const fallback = /filename="([^"]*)"/.exec(header)?.[1];
+
+    expect(response.status).toBe(200);
+    expect(header).toContain(`filename*=UTF-8''${encodeURIComponent(name)}`);
+    expect(fallback).toBeDefined();
+    expect(fallback).not.toMatch(/[^\x20-\x7e]/);
+    expect(fallback).not.toContain('"');
+
+    await storage.deletePrefix(PREFIX);
+  });
+});

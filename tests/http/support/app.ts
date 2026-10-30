@@ -6,7 +6,13 @@
  * диапазона `TEST_APP_PORT`…`TEST_APP_PORT+99`.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { createWriteStream, mkdirSync, readFileSync, type WriteStream } from "node:fs";
+import {
+  createWriteStream,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  type WriteStream,
+} from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +39,11 @@ export interface StartAppOptions {
   port?: number;
   /** Ждать завершения процесса вместо готовности. */
   expectExit?: boolean;
+  /**
+   * Предел ожидания готовности (при `expectExit` — завершения) в миллисекундах.
+   * По умолчанию 240000.
+   */
+  readyTimeoutMs?: number;
   /** Расширение: дописывать вывод экземпляра в файл (нужно `appOutput()`). */
   logFile?: string;
 }
@@ -147,6 +158,12 @@ export async function startApp(options: StartAppOptions = {}): Promise<AppHandle
   const port = options.port ?? (await findFreePort());
   const distDir = `.next-test-${port}`;
   const url = `http://localhost:${port}`;
+  // Отдельный tsconfig экземпляра (см. next.config.ts): Next.js дописывает в
+  // него свои пути, корневой tsconfig.json остаётся нетронутым.
+  writeFileSync(
+    path.join(projectRoot, `${distDir}.tsconfig.json`),
+    `${JSON.stringify({ extends: "./tsconfig.json" }, null, 2)}\n`,
+  );
 
   let log: WriteStream | undefined;
   if (options.logFile !== undefined) {
@@ -203,14 +220,32 @@ export async function startApp(options: StartAppOptions = {}): Promise<AppHandle
     output: () => output,
     exited,
     stop,
+    get exitCode() {
+      return exitCode;
+    },
   };
 
+  const timeoutMs = options.readyTimeoutMs ?? READY_TIMEOUT_MS;
+
   if (options.expectExit === true) {
-    await exited;
+    const finished = await Promise.race([
+      exited.then(() => true),
+      sleep(timeoutMs).then(() => false),
+    ]);
+    if (!finished) {
+      await stop();
+      throw new Error(`Приложение не завершилось за ${timeoutMs} мс:\n${output}`);
+    }
     return handle;
   }
 
-  await waitUntilUp(handle, READY_TIMEOUT_MS);
+  try {
+    await waitUntilUp(handle, timeoutMs);
+  } catch (error) {
+    // Иначе процесс остался бы занимать порт.
+    await stop();
+    throw error;
+  }
   return handle;
 }
 

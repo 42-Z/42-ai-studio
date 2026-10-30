@@ -4,6 +4,9 @@
 # Образы minio/minio и minio/mc удалены с Docker Hub (сентябрь 2026),
 # поэтому взяты их форки pgsty/silo (сервер) и pgsty/mc (клиент mc):
 # те же команды, переменные окружения и S3-совместимый API.
+#
+# Порты публикуются только на петлевом адресе: пароли здесь известны всем,
+# а Docker обходит файрвол хоста.
 services:
   postgres:
     image: postgres:17
@@ -12,32 +15,32 @@ services:
       POSTGRES_PASSWORD: studio
       POSTGRES_DB: studio_dev
     ports:
-      - "55432:5432"
+      - "127.0.0.1:55432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 
   minio:
-    image: pgsty/silo
+    image: pgsty/silo:RELEASE.2026-10-26T00-00-00Z
     command: server /data
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
-      - "59000:9000"
+      - "127.0.0.1:59000:9000"
     volumes:
       - miniodata:/data
 
   # Одноразовый контейнер: создаёт бакеты studio-dev и studio-test.
   createbuckets:
-    image: pgsty/mc
+    image: pgsty/mc:RELEASE.2026-10-26T00-00-00Z
     depends_on:
       - minio
-    entrypoint: >
-      /bin/sh -c "
-      until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done;
-      mc mb --ignore-existing local/studio-dev;
-      mc mb --ignore-existing local/studio-test;
-      "
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done
+        mc mb --ignore-existing local/studio-dev
+        mc mb --ignore-existing local/studio-test
 
 volumes:
   pgdata:

@@ -46,6 +46,11 @@ export class Storage {
       endpoint: config.s3Endpoint,
       region: config.s3Region,
       forcePathStyle: config.s3ForcePathStyle,
+      // С 3.729.0 SDK по умолчанию считает CRC32 и добавляет его параметры
+      // в подписанную ссылку на загрузку; строгие провайдеры такую загрузку
+      // отвергают (aws/aws-sdk-js-v3#6810).
+      requestChecksumCalculation: "WHEN_REQUIRED",
+      responseChecksumValidation: "WHEN_REQUIRED",
       credentials: {
         accessKeyId: config.s3AccessKeyId,
         secretAccessKey: config.s3SecretAccessKey,
@@ -146,13 +151,16 @@ export class Storage {
       Bucket: this.bucket,
       Key: key,
       ResponseContentDisposition: options.downloadName
-        ? `attachment; filename="${options.downloadName}"`
+        ? attachmentDisposition(options.downloadName)
         : undefined,
     });
     return getSignedUrl(this.client, command, { expiresIn: options.expiresIn ?? 3600 });
   }
 
-  /** Подписанная ссылка на загрузку (с типом содержимого). */
+  /**
+   * Подписанная ссылка на загрузку. Тип содержимого входит в подпись:
+   * `PUT` с другим `Content-Type` получает `403 SignatureDoesNotMatch`.
+   */
   async presignUpload(
     key: string,
     contentType: string,
@@ -163,8 +171,24 @@ export class Storage {
       Key: key,
       ContentType: contentType,
     });
-    return getSignedUrl(this.client, command, { expiresIn: options.expiresIn ?? 3600 });
+    return getSignedUrl(this.client, command, {
+      expiresIn: options.expiresIn ?? 3600,
+      signableHeaders: new Set(["content-type"]),
+    });
   }
+}
+
+/**
+ * `Content-Disposition` для скачивания по RFC 6266: запасное имя из печатных
+ * ASCII без кавычек и обратной косой черты плюс точное имя в `filename*`.
+ */
+export function attachmentDisposition(name: string): string {
+  const fallback = name.replace(/[^\x20-\x7e]|["\\]/g, "_");
+  const encoded = encodeURIComponent(name).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 function isNotFound(error: unknown): boolean {
