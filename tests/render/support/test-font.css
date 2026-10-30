@@ -1,0 +1,8 @@
+/*
+ * Next.js объявляет Geist через next/font, который в Vitest не работает.
+ * Тесты берут тот же шрифт из @fontsource-variable/geist (семейство
+ * «Geist Variable») и подставляют его в токен --font-sans приложения.
+ */
+:root {
+  --font-sans: "Geist Variable", sans-serif;
+}
