@@ -41,6 +41,7 @@ curl -i http://localhost:3000/api/health
 | `npm run db:generate` | создать миграцию из изменений схемы |
 | `npm run db:migrate` | применить миграции к базе из `DATABASE_URL` |
 | `npm run test:http` | HTTP-тесты запущенного приложения |
+| `npm run test:render` | тесты отрисовки в настоящем Chromium |
 
 `npm run build` секретов не требует: проверка переменных окружения
 пропускается на фазе сборки. При `npm start` сначала выполняйте
@@ -66,6 +67,33 @@ npm run test:http
 проекта (состояние в `.eve/`) — второй экземпляр делит процесс eve с первым,
 изоляции окружения eve нет. Тестам, которым нужно другое окружение eve,
 понадобится остановить основной экземпляр и вынести их в отдельные файлы.
+
+### Тесты отрисовки
+
+```bash
+npx playwright install chromium   # один раз: браузер для Vitest Browser Mode
+npm run test:render
+```
+
+Тесты открывают настоящий Chromium (безголовый) и проверяют интерфейс в окнах
+390×844 и 1280×800. База и Docker для них не нужны.
+
+На EndeavourOS установщик Playwright предупреждает, что система не
+поддерживается официально, и ставит сборку для Ubuntu. Если Chromium не
+запускается из-за нехватки системных библиотек, `npx playwright install-deps`
+не поможет: он вызывает `apt-get`, которого на EndeavourOS нет. Посмотреть
+недостающие библиотеки:
+
+```bash
+ldd ~/.cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell | grep "not found"
+```
+
+и поставить их через pacman, например:
+
+```bash
+sudo pacman -S --needed alsa-lib at-spi2-core dbus expat glib2 libdrm libxkbcommon \
+  libxcomposite libxdamage libxfixes libxrandr mesa nspr nss
+```
 
 ## Документация
 

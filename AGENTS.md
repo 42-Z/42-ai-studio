@@ -61,6 +61,7 @@ npm run typecheck  # tsc --noEmit
 npm run db:generate  # создать миграцию из изменений схемы (drizzle-kit generate)
 npm run db:migrate   # применить миграции к базе из DATABASE_URL
 npm run test:http    # HTTP-тесты запущенного приложения (нужен docker compose up -d)
+npm run test:render  # тесты отрисовки в настоящем Chromium (см. README)
 ```
 
 Нативные команды eve: `eve dev`, `eve build`, `eve start`, `eve info`, `eve eval`, `eve deploy`.
@@ -94,7 +95,8 @@ npx shadcn@latest mcp init --client claude   # подключить MCP-серв
 ```
 
 - Перед созданием любого элемента интерфейса смотреть `docs`, `search` и `view` по `@shadcn`, `@watermelon` и `@react-bits`. Если подходящего нет, собирать новый компонент из компонентов shadcn и примитивов Base UI, а не из голого HTML.
-- Файлы в `components/ui` принадлежат проекту. Перед `add --overwrite` смотреть `add <имя> --diff`.
+- Собственные составные компоненты проекта лежат в `components/studio`; в `components/ui` — только компоненты, установленные shadcn.
+- Установленные файлы в `components/ui` можно править под проект. Перед `add --overwrite` смотреть `add <имя> --diff`.
 - Тему и шрифты менять пресетом (`apply`), а не правкой токенов по одному.
 - `@watermelon` и `@react-bits` встроены в CLI (каталог shadcn); остальные реестры подключать через `@namespace` в `components.json`.
 
@@ -115,6 +117,17 @@ npx shadcn@latest mcp init --client claude   # подключить MCP-серв
 - Две полноценные раскладки, для компьютера и для телефона; светлая и тёмная темы.
 - Весь интерфейс собирается только из компонентов shadcn/ui и его реестров (`@watermelon`, `@react-bits`, другие из каталога shadcn). Собственные CSS-стили и голый HTML вместо компонента не писать; компоненты компонуются утилитами Tailwind и токенами темы. Для чата навыки `ai-elements` и `streamdown` из `.agents/skills/`.
 - Ожидающие вопросы и подтверждения — через `openConversationInputs(agent.data)` и `agent.respond()`.
+
+### Каркас интерфейса
+
+| Имя | Что это |
+| --- | --- |
+| `AppShell` | компоновка приложения. Свойства: `navItems`, `pathname`, `userSlot`, `children`. На компьютере постоянная боковая панель, на телефоне (ниже 768 px) она скрыта и открывается кнопкой в верхней строке поверх экрана |
+| `PublicShell` | компоновка публичных страниц: шапка с названием сервиса и `ThemeToggle`, контент по центру, без боковой панели |
+| `NavItem` | `{ title, href, icon, requires?: "operator" }`; `requires` показывает пункт только оператору (использует #30) |
+| `navItems` | единственный массив пунктов навигации, один на проект (сейчас «Сессии» → `/s`; «Настройки» добавит #26, «Админку» — #30) |
+
+Группы маршрутов Next.js: `(app)` с layout на `AppShell` и `(public)` с layout на `PublicShell`. `AppShell` и `PublicShell` не импортируют `next/font`, `next/navigation` и другие модули, которые работают только внутри Next.js: тестам отрисовки они нужны без роутера. Текущий путь приходит свойством.
 
 ## Авторизация
 
@@ -196,6 +209,18 @@ u/<user_id>/s/<app_session_id>/<вид>/<uuid>/<имя файла>
 | `s3()` | клиент тестового бакета для проверок: `getBytes(key)`, `exists(key)`, `listKeys(prefix)`, `put(key, bytes, contentType)`, `deletePrefix(prefix)`; бакет очищается тем же вызовом перед каждым файлом |
 
 Тесты идут последовательно (`fileParallelism: false`): `resetDatabase()` перед каждым файлом несовместим с параллельными файлами. Таймаут хука глобальной подготовки — 240 с (холодный старт `next dev` вместе с eve), таймаут обычного теста — 30 с.
+
+## Тесты отрисовки
+
+Команда `npm run test:render` (конфигурация `vitest.render.config.ts`, файлы — `tests/render/**/*.test.tsx`) запускает настоящий Chromium через Playwright и проверяет, что видит пользователь в окнах «телефон» и «компьютер». React-компоненты отрисовывает `vitest-browser-react`; глобальные стили общие с приложением, шрифт в тестах берётся из `@fontsource-variable/geist` (next/font в Vitest не работает).
+
+| Средство | Поведение |
+| --- | --- |
+| `viewports` | `{ phone: { width: 390, height: 844 }, desktop: { width: 1280, height: 800 } }` |
+| `renderOnPhone(ui)`, `renderOnDesktop(ui)` | задают размер окна, отрисовывают `ui` внутри `ThemeProvider` и общих стилей, возвращают результат `vitest-browser-react` (промис, его `await`-ят) |
+| `expectNoHorizontalScroll()` | утверждает, что `document.documentElement.scrollWidth` не больше ширины окна |
+
+`tests/render/fixtures/` — записанное состояние сообщений беседы; заполнят #5 и следующие тикеты. Установка браузера и системных библиотек — в `README.md`.
 
 ## Порты
 
