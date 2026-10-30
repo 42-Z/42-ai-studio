@@ -17,13 +17,21 @@
     "start:agent": "eve start",
     "eval": "eve eval",
     "deploy": "eve deploy",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "test:http": "vitest run --config vitest.http.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1157.0",
+    "@aws-sdk/s3-request-presigner": "^3.1157.0",
+    "@next/env": "^16.4.3",
     "@vercel/connect": "2.5.2",
     "ai": "^7.0.137",
+    "drizzle-orm": "^0.45.4",
     "eve": "^0.83.0",
     "next": "16.4.3",
+    "postgres": "^3.4.9",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "zod": "4.5.4"
@@ -32,7 +40,9 @@
     "@types/node": "24.x",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "typescript": "^5"
+    "drizzle-kit": "^0.31.11",
+    "typescript": "^5",
+    "vitest": "^5.0.5"
   },
   "engines": {
     "node": "24.x"
