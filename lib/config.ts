@@ -9,8 +9,12 @@
  * Правило для следующих тикетов: любая новая переменная появляется здесь, в
  * `.env.example` и, если без неё сервер перестанет стартовать в тестах, в `.env.test`.
  */
-import { loadEnvConfig } from "@next/env";
+import * as nextEnv from "@next/env";
 import { z } from "zod";
+
+// `@next/env` — CommonJS без default-экспорта: именованный импорт ломается
+// в сборщике eve, а default-импорт — в Next.js. Пространство имён читают оба.
+const { loadEnvConfig } = nextEnv;
 
 /** Ошибка конфигурации: каждая строка списка — «ИМЯ: причина». */
 export class ConfigError extends Error {
@@ -49,7 +53,22 @@ export interface AppConfig {
   readonly testAppPort: number;
   /** Каталог сборки Next.js. */
   readonly nextDistDir: string;
+  /** Client ID (Bot ID) из @BotFather; `aud` в `id_token`. */
+  readonly telegramClientId: string | undefined;
+  /** Client Secret из @BotFather. */
+  readonly telegramClientSecret: string | undefined;
+  /** Издатель OIDC, от него берётся discovery-документ. */
+  readonly telegramOidcIssuer: string;
+  /** Секрет подписи короткоживущей cookie входа и контейнера OIDC. */
+  readonly sessionSecret: string;
+  /** Срок жизни сессии входа в днях. */
+  readonly sessionTtlDays: number;
+  /** Вход без Telegram для локальной разработки. */
+  readonly devLoginEnabled: boolean;
 }
+
+/** Значение из `.env.example`: в production не годится в качестве секрета. */
+const EXAMPLE_SESSION_SECRET = "dev-only-session-secret-change-me-0123456789abcd";
 
 /**
  * Один помощник для логических значений: `1`, `0`, `true`, `false`.
@@ -114,7 +133,35 @@ const envSchema = z.object({
     .min(1, "не может быть пустой")
     .optional()
     .default(".next"),
+  TELEGRAM_CLIENT_ID: z
+    .string({ error: "ожидается только цифры" })
+    .regex(/^\d+$/, "ожидается только цифры")
+    .optional(),
+  TELEGRAM_CLIENT_SECRET: envString.optional(),
+  TELEGRAM_OIDC_ISSUER: envUrl
+    .refine((value) => !value.endsWith("/"), "не должен заканчиваться на /")
+    .optional()
+    .default("https://oauth.telegram.org"),
+  SESSION_SECRET: envString.min(32, "секрет должен быть не короче 32 символов"),
+  SESSION_TTL_DAYS: z.coerce
+    .number({ error: "ожидается целое число от 1 до 365" })
+    .int("ожидается целое число от 1 до 365")
+    .min(1, "ожидается целое число от 1 до 365")
+    .max(365, "ожидается целое число от 1 до 365")
+    .optional()
+    .default(30),
+  DEV_LOGIN_ENABLED: envBoolean.optional().default(false),
 });
+
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+function isLocalHost(appUrl: string): boolean {
+  try {
+    return LOCAL_HOSTS.has(new URL(appUrl).hostname);
+  } catch {
+    return false;
+  }
+}
 
 /** Запись окружения: как `process.env`. */
 export type EnvRecord = Record<string, string | undefined>;
@@ -141,12 +188,53 @@ export function parseConfig(env: EnvRecord): AppConfig {
 
   const result = envSchema.safeParse(normalized);
   const issues: string[] = result.success ? [] : formatIssues(result.error);
+  const extra = new Map<string, string>();
+  const addIssue = (name: string, message: string) => {
+    if (extra.has(name)) return;
+    extra.set(name, `${name}: ${message}`);
+  };
 
-  if (result.success && result.data.APP_TEST_MODE && normalized.NODE_ENV === "production") {
-    issues.push("APP_TEST_MODE: тестовые подмены запрещены при NODE_ENV=production");
+  if (result.success) {
+    const data = result.data;
+    const production = normalized.NODE_ENV === "production";
+
+    if (data.APP_TEST_MODE && production) {
+      addIssue("APP_TEST_MODE", "тестовые подмены запрещены при NODE_ENV=production");
+    }
+
+    if (production) {
+      if (data.TELEGRAM_CLIENT_ID === undefined) {
+        addIssue("TELEGRAM_CLIENT_ID", "обязательна при NODE_ENV=production");
+      }
+      if (data.TELEGRAM_CLIENT_SECRET === undefined) {
+        addIssue("TELEGRAM_CLIENT_SECRET", "обязательна при NODE_ENV=production");
+      }
+      if (data.SESSION_SECRET === EXAMPLE_SESSION_SECRET) {
+        addIssue("SESSION_SECRET", "пример из .env.example не годится для production");
+      }
+    } else if ((data.TELEGRAM_CLIENT_ID === undefined) !== (data.TELEGRAM_CLIENT_SECRET === undefined)) {
+      addIssue(
+        data.TELEGRAM_CLIENT_ID === undefined ? "TELEGRAM_CLIENT_ID" : "TELEGRAM_CLIENT_SECRET",
+        "задайте вместе с парной переменной или уберите обе",
+      );
+    }
+
+    if (data.DEV_LOGIN_ENABLED && production) {
+      addIssue("DEV_LOGIN_ENABLED", "вход без Telegram запрещён при NODE_ENV=production");
+    } else if (data.DEV_LOGIN_ENABLED && !isLocalHost(data.APP_URL)) {
+      addIssue(
+        "DEV_LOGIN_ENABLED",
+        "вход без Telegram разрешён только на localhost, 127.0.0.1 или [::1]",
+      );
+    }
+
+    if (!data.APP_TEST_MODE && !data.TELEGRAM_OIDC_ISSUER.startsWith("https://")) {
+      addIssue("TELEGRAM_OIDC_ISSUER", "издатель должен работать по https://");
+    }
   }
 
-  if (issues.length > 0) throw new ConfigError(issues);
+  const allIssues = [...issues, ...extra.values()];
+  if (allIssues.length > 0) throw new ConfigError(allIssues);
 
   const data = (result as z.ZodSafeParseSuccess<z.infer<typeof envSchema>>).data;
   return {
@@ -161,6 +249,12 @@ export function parseConfig(env: EnvRecord): AppConfig {
     appTestMode: data.APP_TEST_MODE,
     testAppPort: data.TEST_APP_PORT,
     nextDistDir: data.NEXT_DIST_DIR,
+    telegramClientId: data.TELEGRAM_CLIENT_ID,
+    telegramClientSecret: data.TELEGRAM_CLIENT_SECRET,
+    telegramOidcIssuer: data.TELEGRAM_OIDC_ISSUER,
+    sessionSecret: data.SESSION_SECRET,
+    sessionTtlDays: data.SESSION_TTL_DAYS,
+    devLoginEnabled: data.DEV_LOGIN_ENABLED,
   };
 }
 

@@ -31,6 +31,31 @@ curl -i http://localhost:3000/api/health
 # {"status":"error","checks":{"database":"ok","storage":"error"}}
 ```
 
+## Вход через Telegram
+
+Отдельных учётных записей нет: пользователь входит через Telegram, при первом входе
+создаётся строка `users`. Вход устроен по OIDC (Authorization Code Flow + PKCE).
+
+1. Создайте бота в [@BotFather](https://t.me/botfather) и откройте у него **Login Widget**.
+2. В **Allowed URLs** добавьте адрес приложения и точный redirect URI:
+   - `<APP_URL>`
+   - `<APP_URL>/api/auth/telegram/callback`
+
+   Telegram обрабатывает входы только по заранее зарегистрированным адресам.
+3. Скопируйте **Client ID** и **Client Secret** в `TELEGRAM_CLIENT_ID` и
+   `TELEGRAM_CLIENT_SECRET`.
+4. Не меняйте алгоритм подписи `id_token`: сервер проверяет `RS256`.
+5. Задайте `SESSION_SECRET` длиной не короче 32 символов:
+   `openssl rand -base64 48`.
+
+Для локальной разработки без Telegram включите `DEV_LOGIN_ENABLED=1` (только
+`localhost`, `127.0.0.1` или `[::1]`) и откройте
+`/api/auth/dev-login?telegramId=777&name=Разработчик`. Параметр `operator=1`
+делает пользователя оператором.
+
+`GET /eve/v1/health` публичен; остальные маршруты eve требуют cookie сессии,
+а `GET /eve/v1/info` доступен только оператору.
+
 ## Команды
 
 | Команда | Что делает |

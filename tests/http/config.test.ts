@@ -19,6 +19,7 @@ function validEnv(): EnvRecord {
     APP_TEST_MODE: "1",
     TEST_APP_PORT: "3100",
     NEXT_DIST_DIR: ".next-test-3100",
+    SESSION_SECRET: "test-session-secret-0123456789abcdef",
     NODE_ENV: "test",
   };
 }
@@ -51,7 +52,12 @@ describe("parseConfig", () => {
   });
 
   test("APP_TEST_MODE=1 при NODE_ENV=production отвергается", () => {
-    const issues = issuesOf({ ...validEnv(), NODE_ENV: "production" });
+    const issues = issuesOf({
+      ...validEnv(),
+      NODE_ENV: "production",
+      TELEGRAM_CLIENT_ID: "123456789",
+      TELEGRAM_CLIENT_SECRET: "secret",
+    });
 
     expect(issues).toHaveLength(1);
     expect(issues[0]).toContain("APP_TEST_MODE");
@@ -131,5 +137,140 @@ describe("parseConfig", () => {
     expect(issuesOf({ ...validEnv(), TEST_APP_PORT: "70000" })[0]).toContain("TEST_APP_PORT");
     expect(issuesOf({ ...validEnv(), TEST_APP_PORT: "port" })[0]).toContain("TEST_APP_PORT");
     expect(parseConfig({ ...validEnv(), TEST_APP_PORT: "3199" }).testAppPort).toBe(3199);
+  });
+});
+
+/** Production-окружение без тестовых подмен. */
+function productionEnv(): EnvRecord {
+  const env = validEnv();
+  delete env.APP_TEST_MODE;
+  delete env.TEST_APP_PORT;
+  delete env.NEXT_DIST_DIR;
+  return {
+    ...env,
+    NODE_ENV: "production",
+    APP_URL: "https://studio.example.com",
+    TELEGRAM_CLIENT_ID: "123456789",
+    TELEGRAM_CLIENT_SECRET: "secret",
+  };
+}
+
+describe("parseConfig: вход через Telegram", () => {
+  test("по умолчанию издатель oauth.telegram.org, срок 30 дней, dev-вход выключен", () => {
+    const config = parseConfig(validEnv());
+
+    expect(config.telegramOidcIssuer).toBe("https://oauth.telegram.org");
+    expect(config.sessionTtlDays).toBe(30);
+    expect(config.devLoginEnabled).toBe(false);
+    expect(config.telegramClientId).toBeUndefined();
+    expect(config.telegramClientSecret).toBeUndefined();
+  });
+
+  test("production без TELEGRAM_CLIENT_ID или TELEGRAM_CLIENT_SECRET отвергается", () => {
+    const noId = productionEnv();
+    delete noId.TELEGRAM_CLIENT_ID;
+    expect(issuesOf(noId)[0]).toContain("TELEGRAM_CLIENT_ID");
+
+    const noSecret = productionEnv();
+    delete noSecret.TELEGRAM_CLIENT_SECRET;
+    expect(issuesOf(noSecret)[0]).toContain("TELEGRAM_CLIENT_SECRET");
+  });
+
+  test("одна переменная Telegram без другой отвергается вне production", () => {
+    const withId = validEnv();
+    withId.TELEGRAM_CLIENT_ID = "424242";
+    const missingSecret = issuesOf(withId);
+    expect(missingSecret).toHaveLength(1);
+    expect(missingSecret[0]).toContain("TELEGRAM_CLIENT_SECRET");
+
+    const withSecret = validEnv();
+    withSecret.TELEGRAM_CLIENT_SECRET = "secret";
+    const missingId = issuesOf(withSecret);
+    expect(missingId).toHaveLength(1);
+    expect(missingId[0]).toContain("TELEGRAM_CLIENT_ID");
+  });
+
+  test("SESSION_SECRET короче 32 символов отвергается", () => {
+    const issues = issuesOf({ ...validEnv(), SESSION_SECRET: "короткий" });
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("SESSION_SECRET");
+  });
+
+  test("SESSION_SECRET обязателен всегда", () => {
+    const env = validEnv();
+    delete env.SESSION_SECRET;
+
+    expect(issuesOf(env)[0]).toContain("SESSION_SECRET");
+  });
+
+  test("пример SESSION_SECRET отвергается в production", () => {
+    const issues = issuesOf({
+      ...productionEnv(),
+      SESSION_SECRET: "dev-only-session-secret-change-me-0123456789abcd",
+    });
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("SESSION_SECRET");
+  });
+
+  test("DEV_LOGIN_ENABLED=1 запрещён в production", () => {
+    const issues = issuesOf({ ...productionEnv(), DEV_LOGIN_ENABLED: "1" });
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("DEV_LOGIN_ENABLED");
+  });
+
+  test("DEV_LOGIN_ENABLED=1 запрещён на публичном хосте", () => {
+    const issues = issuesOf({
+      ...validEnv(),
+      APP_URL: "https://app.example.com",
+      DEV_LOGIN_ENABLED: "1",
+    });
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("DEV_LOGIN_ENABLED");
+
+    for (const appUrl of ["http://localhost:3000", "http://127.0.0.1:3000", "http://[::1]:3000"]) {
+      expect(() => parseConfig({ ...validEnv(), APP_URL: appUrl, DEV_LOGIN_ENABLED: "1" })).not.toThrow();
+    }
+  });
+
+  test("издатель не на https:// запрещён без APP_TEST_MODE", () => {
+    const env = validEnv();
+    delete env.APP_TEST_MODE;
+    const issues = issuesOf({ ...env, TELEGRAM_OIDC_ISSUER: "http://localhost:59100" });
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("TELEGRAM_OIDC_ISSUER");
+
+    expect(() =>
+      parseConfig({
+        ...validEnv(),
+        APP_TEST_MODE: "1",
+        TELEGRAM_OIDC_ISSUER: "http://localhost:59100",
+      }),
+    ).not.toThrow();
+  });
+
+  test("TELEGRAM_OIDC_ISSUER не должен заканчиваться на /", () => {
+    const issues = issuesOf({ ...validEnv(), TELEGRAM_OIDC_ISSUER: "https://oauth.telegram.org/" });
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("TELEGRAM_OIDC_ISSUER");
+  });
+
+  test("TELEGRAM_CLIENT_ID состоит только из цифр", () => {
+    const env = { ...validEnv(), TELEGRAM_CLIENT_ID: "abc", TELEGRAM_CLIENT_SECRET: "secret" };
+
+    expect(issuesOf(env)[0]).toContain("TELEGRAM_CLIENT_ID");
+  });
+
+  test("SESSION_TTL_DAYS принимает только целое от 1 до 365", () => {
+    for (const value of ["0", "366", "1.5", "month"]) {
+      expect(issuesOf({ ...validEnv(), SESSION_TTL_DAYS: value })[0]).toContain("SESSION_TTL_DAYS");
+    }
+    expect(parseConfig({ ...validEnv(), SESSION_TTL_DAYS: "1" }).sessionTtlDays).toBe(1);
+    expect(parseConfig({ ...validEnv(), SESSION_TTL_DAYS: "365" }).sessionTtlDays).toBe(365);
   });
 });

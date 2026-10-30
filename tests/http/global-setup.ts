@@ -4,6 +4,8 @@
  * Тесты работают только с базой `*_test`, поэтому перед созданием базы
  * проверяется её имя — чтобы случайно не стереть рабочие данные.
  */
+import { rmSync } from "node:fs";
+
 import type { TestProject } from "vitest/node";
 
 import { loadConfig } from "../../lib/config";
@@ -16,8 +18,10 @@ import {
   migrationJournalCount,
   resetDatabase,
 } from "./support/db";
+import { startOidcIssuer, type OidcIssuer } from "./support/oidc-issuer";
 
 let app: AppHandle | undefined;
+let oidcIssuer: OidcIssuer | undefined;
 
 /** Создаёт тестовую базу через служебную базу `postgres`, если её ещё нет. */
 async function ensureDatabase(databaseUrl: string): Promise<void> {
@@ -58,6 +62,15 @@ export async function setup(project: TestProject): Promise<void> {
     throw new Error("журнал миграций пуст: миграции не применились");
   }
 
+  oidcIssuer = await startOidcIssuer(config.telegramOidcIssuer, {
+    appUrl: config.appUrl,
+    clientId: config.telegramClientId ?? "",
+    clientSecret: config.telegramClientSecret ?? "",
+  });
+
+  // Журнал предыдущего прогона не должен смешиваться с текущим.
+  rmSync(APP_LOG_FILE, { force: true });
+
   app = await startApp({
     port: config.testAppPort,
     logFile: APP_LOG_FILE,
@@ -67,5 +80,6 @@ export async function setup(project: TestProject): Promise<void> {
 
 export async function teardown(): Promise<void> {
   await app?.stop();
+  await oidcIssuer?.close();
   await closeDb();
 }

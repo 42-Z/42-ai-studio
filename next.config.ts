@@ -22,6 +22,23 @@ const nextConfig: NextConfig = {
   // `startApp` (`<distDir>.tsconfig.json`, расширяет корневой), иначе каждый
   // прогон тестов менял бы tsconfig.json в репозитории.
   typescript: distDir === ".next" ? undefined : { tsconfigPath: `${distDir}.tsconfig.json` },
+  // Библиотека telegram-login.js общается с Telegram через popup; при
+  // `same-origin` этот обмен блокируется. Поток входа в этом тикете идёт
+  // редиректами, но политика оставляет место для popup-варианта.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [{ key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" }],
+      },
+    ];
+  },
+  logging: {
+    incomingRequests: {
+      // В журнал разработки не должны попадать URL с кодом авторизации.
+      ignore: [/\/api\/auth\//],
+    },
+  },
 };
 
 export default withEve((phase) => {

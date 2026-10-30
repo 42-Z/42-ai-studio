@@ -20,5 +20,21 @@ export const users = pgTable("users", {
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
 });
 
+/**
+ * Серверные сессии входа. В базе лежит только SHA-256 токена из cookie,
+ * поэтому утечка таблицы не даёт готовых cookie.
+ */
+export const authSessions = pgTable("auth_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+export type AuthSession = typeof authSessions.$inferSelect;
