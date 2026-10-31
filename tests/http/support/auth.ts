@@ -89,7 +89,7 @@ export async function loginViaTelegram(
   const [user] = await db()
     .select()
     .from(users)
-    .where(eq(users.telegramId, profile.id))
+    .where(eq(users.telegramId, Number(profile.id)))
     .limit(1);
 
   return { steps: [start.login, authorize, callback], cookie, user: user ?? null };

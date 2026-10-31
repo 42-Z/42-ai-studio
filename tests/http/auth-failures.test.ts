@@ -119,6 +119,19 @@ describe("порча id_token", () => {
     expect(result.cookie).toBeNull();
     await expectNoLoginData();
   });
+
+  test.each(["", "0", "-1", "1.5", "1e3", "0x10", " 4242", "4242junk", "9007199254740993"])(
+    "некорректный строковый id «%s» не создаёт пользователя",
+    async (id) => {
+      await telegramStub.setProfile({ ...DEFAULT_PROFILE, id });
+      const { callbackUrl, oidcCookie } = await callbackUrlFromIssuer();
+
+      const response = await getCallback(callbackUrl, oidcCookie);
+
+      expectRejected(response);
+      await expectNoLoginData();
+    },
+  );
 });
 
 describe("cookie studio_oidc и state", () => {

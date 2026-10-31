@@ -23,7 +23,7 @@ export type TamperKind =
   | "unknown_kid";
 
 export interface TelegramProfile {
-  id: number;
+  id: number | string;
   name: string;
   preferred_username?: string | null;
   picture?: string | null;
@@ -41,12 +41,12 @@ export interface OidcIssuer {
   close(): Promise<void>;
 }
 
-export const DEFAULT_PROFILE: TelegramProfile = {
+export const DEFAULT_PROFILE = {
   id: 4242,
   name: "Тест Тестович",
   preferred_username: "test_user",
   picture: "https://example.com/avatar.png",
-};
+} satisfies TelegramProfile;
 
 interface PendingCode {
   nonce: string;

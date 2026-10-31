@@ -166,6 +166,17 @@ describe("полный вход через тестовый издатель", (
     expect(secondProfile.name).toBe("Другой");
   });
 
+  test("строковый Telegram ID входит в тот же аккаунт, что и числовой", async () => {
+    const first = await loginViaTelegram({ ...DEFAULT_PROFILE, id: 4294967297 });
+    const firstProfile = await readProfile(first.cookie);
+
+    const second = await loginViaTelegram({ ...DEFAULT_PROFILE, id: "4294967297" });
+
+    expect(second.steps[2].headers.get("location")).toBe(`${inject("appUrl")}/s`);
+    expect(await readProfile(second.cookie)).toEqual(firstProfile);
+    expect(await userCount()).toBe(1);
+  });
+
   test("после входа сохраняет безопасный next", async () => {
     const result = await loginViaTelegram(DEFAULT_PROFILE, { next: "/s/session-1" });
 

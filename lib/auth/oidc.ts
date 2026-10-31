@@ -294,7 +294,9 @@ const MAX_PHOTO_URL_LENGTH = 1000;
 
 /** Превращает claims Telegram в профиль пользователя. */
 export function profileFromClaims(payload: JWTPayload): TelegramProfile {
-  const id = payload.id;
+  // Telegram присылает id строкой, хотя официальный пример показывает число.
+  const rawId = payload.id;
+  const id = typeof rawId === "string" && /^[1-9]\d*$/.test(rawId) ? Number(rawId) : rawId;
   if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0) {
     throw new AuthFlowError("missing_id");
   }
