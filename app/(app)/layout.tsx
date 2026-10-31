@@ -1,16 +1,16 @@
-"use client";
+import { AppFrame } from "@/components/studio/app-frame";
+import { getCurrentUser } from "@/lib/auth/guard";
+import { toPublicUser } from "@/lib/auth/user";
 
-import { usePathname } from "next/navigation";
-
-import { AppShell } from "@/components/studio/app-shell";
-import { navItems } from "@/components/studio/nav";
-
-export default function AppLayout({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
+/**
+ * Оболочка группы: показывает пользователя, если он есть. Саму проверку
+ * входа делает страница своим путём: layout не знает pathname, а Next.js
+ * не перерисовывает его при навигации, поэтому проверка живёт у данных.
+ */
+export default async function AppLayout({ children }: { children: React.ReactNode }) {
+  const user = await getCurrentUser();
 
   return (
-    <AppShell navItems={navItems} pathname={pathname}>
-      {children}
-    </AppShell>
+    <AppFrame user={user === null ? null : toPublicUser(user)}>{children}</AppFrame>
   );
 }

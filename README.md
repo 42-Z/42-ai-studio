@@ -31,6 +31,42 @@ curl -i http://localhost:3000/api/health
 # {"status":"error","checks":{"database":"ok","storage":"error"}}
 ```
 
+## Вход через Telegram
+
+Отдельных учётных записей нет: пользователь входит через Telegram, при первом входе
+создаётся строка `users`. Вход использует Telegram OpenID Connect: браузер
+переходит на страницу Telegram, сервер обменивает код на `id_token` и проверяет его.
+
+1. Создайте бота в [@BotFather](https://t.me/botfather) и откройте у него **Login Widget**.
+2. Если показана **Switch to OpenID Connect Login**, включите этот режим:
+   он навсегда отключает старый Login Widget у этого бота.
+3. Зарегистрируйте публичный HTTPS-адрес приложения (`APP_URL`):
+   - **Trusted Origins**: `<APP_URL>`;
+   - **Redirect URIs**: `<APP_URL>/api/auth/telegram/callback`.
+
+   В интерфейсе с общим списком **Allowed URLs** добавьте оба адреса туда.
+   `localhost` BotFather не принимает: для локальной проверки используйте HTTPS-туннель.
+4. Скопируйте **Client ID** и **Client Secret** в `TELEGRAM_CLIENT_ID` и
+   `TELEGRAM_CLIENT_SECRET`. Client Secret — отдельное значение, не токен бота;
+   он хранится только на сервере.
+5. Не меняйте алгоритм подписи `id_token`: сервер проверяет `RS256`.
+6. Задайте `SESSION_SECRET` длиной не короче 32 символов:
+   `openssl rand -base64 48`.
+
+Поток: `GET /api/auth/telegram/login` создаёт `state`, одноразовый `nonce` и PKCE,
+сохраняет их в подписанной HttpOnly-cookie на 10 минут и направляет в Telegram.
+`GET /api/auth/telegram/callback` проверяет cookie и `state`, обменивает код,
+проверяет подпись по JWKS, `iss`, `aud`, `exp`, `iat`, `sub` и `nonce`,
+гасит nonce и создаёт сессию. Временная cookie удаляется и при успехе, и при отказе.
+
+Для локальной разработки без Telegram включите `DEV_LOGIN_ENABLED=1` (только
+`localhost`, `127.0.0.1` или `[::1]`) и откройте
+`/api/auth/dev-login?telegramId=777&name=Разработчик`. Параметр `operator=1`
+делает пользователя оператором.
+
+`GET /eve/v1/health` публичен; остальные маршруты eve требуют cookie сессии,
+а `GET /eve/v1/info` доступен только оператору.
+
 ## Команды
 
 | Команда | Что делает |
