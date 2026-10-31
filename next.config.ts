@@ -23,8 +23,7 @@ const nextConfig: NextConfig = {
   // прогон тестов менял бы tsconfig.json в репозитории.
   typescript: distDir === ".next" ? undefined : { tsconfigPath: `${distDir}.tsconfig.json` },
   // Библиотека telegram-login.js общается с Telegram через popup; при
-  // `same-origin` этот обмен блокируется. Поток входа в этом тикете идёт
-  // редиректами, но политика оставляет место для popup-варианта.
+  // `same-origin` этот обмен блокируется.
   async headers() {
     return [
       {
@@ -35,7 +34,7 @@ const nextConfig: NextConfig = {
   },
   logging: {
     incomingRequests: {
-      // В журнал разработки не должны попадать URL с кодом авторизации.
+      // Тела и токены входа не должны попадать в журнал разработки.
       ignore: [/\/api\/auth\//],
     },
   },

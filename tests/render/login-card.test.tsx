@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { page } from "vitest/browser";
 
 import { LoginCard } from "@/components/studio/login-card";
@@ -10,15 +10,16 @@ function loginCard(props: {
   telegramEnabled: boolean;
   devLoginEnabled: boolean;
   error: "blocked" | "failed" | null;
+  onTelegramClick?: () => void;
 }) {
   return (
     <PublicShell>
-      <LoginCard next="/s" {...props} />
+      <LoginCard {...props} />
     </PublicShell>
   );
 }
 
-test("страница входа показывает заголовок и ссылку на Telegram", async () => {
+test("страница входа показывает заголовок и кнопку Telegram", async () => {
   await renderOnDesktop(
     loginCard({ telegramEnabled: true, devLoginEnabled: false, error: null }),
   );
@@ -29,10 +30,26 @@ test("страница входа показывает заголовок и с�
     .toBeVisible();
   await expect
     .element(page.getByRole("button", { name: "Войти через Telegram" }))
-    .toHaveAttribute("href", "/api/auth/telegram/login?next=%2Fs");
+    .toBeVisible();
   await expect
     .element(page.getByRole("button", { name: "Войти как разработчик" }))
     .not.toBeInTheDocument();
+});
+
+test("кнопка Telegram вызывает обработчик", async () => {
+  const onTelegramClick = vi.fn();
+  await renderOnDesktop(
+    loginCard({
+      telegramEnabled: true,
+      devLoginEnabled: false,
+      error: null,
+      onTelegramClick,
+    }),
+  );
+
+  await page.getByRole("button", { name: "Войти через Telegram" }).click();
+
+  expect(onTelegramClick).toHaveBeenCalledTimes(1);
 });
 
 test("кнопка разработчика видна только при включённом флаге", async () => {

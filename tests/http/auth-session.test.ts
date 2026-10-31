@@ -1,10 +1,10 @@
 /** Страницы и API под защитой сессии, блокировка и выход. */
 import { eq } from "drizzle-orm";
-import { beforeEach, describe, expect, inject, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 
 import { authSessions, users } from "../../lib/db/schema";
 import { fetchApp } from "./support/app";
-import { loginAs, loginViaTelegram } from "./support/auth";
+import { loginAs } from "./support/auth";
 import { cookieAttribute, requireSetCookie } from "./support/cookies";
 import { createUser, db, resetDatabase } from "./support/db";
 import { telegramStub } from "./support/telegram";
@@ -91,28 +91,6 @@ describe("блокировка", () => {
     await db().update(users).set({ isBlocked: false }).where(eq(users.id, user.id));
 
     expect((await fetchApp("/api/auth/me", { headers: { cookie } })).status).toBe(200);
-  });
-
-  test("новый вход через Telegram даёт error=blocked и не обновляет строку", async () => {
-    const user = await createUser({
-      telegramId: 4242,
-      name: "Заблокированный",
-      lastLoginAt: null,
-    });
-    await db().update(users).set({ isBlocked: true }).where(eq(users.id, user.id));
-
-    const result = await loginViaTelegram();
-
-    expect(result.steps[2].status).toBe(302);
-    expect(result.steps[2].headers.get("location")).toBe(
-      `${inject("appUrl")}/login?error=blocked`,
-    );
-    expect(result.cookie).toBeNull();
-
-    const [row] = await db().select().from(users).where(eq(users.id, user.id));
-    expect(row.name).toBe("Заблокированный");
-    expect(row.lastLoginAt).toBeNull();
-    expect(await db().select().from(authSessions)).toHaveLength(0);
   });
 });
 

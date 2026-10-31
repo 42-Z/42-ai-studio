@@ -34,19 +34,25 @@ curl -i http://localhost:3000/api/health
 ## Вход через Telegram
 
 Отдельных учётных записей нет: пользователь входит через Telegram, при первом входе
-создаётся строка `users`. Вход устроен по OIDC (Authorization Code Flow + PKCE).
+создаётся строка `users`. Используется официальная библиотека `telegram-login.js`:
+она открывает popup, а сервер проверяет полученный `id_token`.
 
 1. Создайте бота в [@BotFather](https://t.me/botfather) и откройте у него **Login Widget**.
-2. В **Allowed URLs** добавьте адрес приложения и точный redirect URI:
+2. В **Allowed URLs** добавьте адрес приложения и страницу входа:
    - `<APP_URL>`
-   - `<APP_URL>/api/auth/telegram/callback`
+   - `<APP_URL>/login`
 
-   Telegram обрабатывает входы только по заранее зарегистрированным адресам.
-3. Скопируйте **Client ID** и **Client Secret** в `TELEGRAM_CLIENT_ID` и
-   `TELEGRAM_CLIENT_SECRET`.
+   Библиотека передаёт Telegram текущий адрес страницы, поэтому он должен быть
+   среди разрешённых. Telegram обрабатывает входы только по ним.
+3. Скопируйте **Client ID** в `TELEGRAM_CLIENT_ID`. Client Secret для popup-входа
+   не нужен: обмена кода на сервере нет.
 4. Не меняйте алгоритм подписи `id_token`: сервер проверяет `RS256`.
 5. Задайте `SESSION_SECRET` длиной не короче 32 символов:
    `openssl rand -base64 48`.
+
+Поток: страница получает одноразовый `nonce` и подписанный токен у сервера,
+библиотека возвращает `id_token`, сервер проверяет подпись по JWKS, `iss`,
+`aud`, `exp` и `nonce`, гасит nonce и создаёт сессию.
 
 Для локальной разработки без Telegram включите `DEV_LOGIN_ENABLED=1` (только
 `localhost`, `127.0.0.1` или `[::1]`) и откройте

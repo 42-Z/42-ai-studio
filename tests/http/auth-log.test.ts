@@ -12,20 +12,17 @@ beforeEach(async () => {
   await resetDatabase();
 });
 
-test("вывод приложения за время тестов не содержит секретов, code, id_token и токена cookie", async () => {
+test("вывод приложения за время тестов не содержит секретов, id_token и токена cookie", async () => {
   const result = await loginViaTelegram();
   const config = loadConfig();
   const issued = await telegramStub.lastIssued();
   const token = result.cookie?.split("=")[1];
 
-  expect(config.telegramClientSecret).toBeDefined();
   expect(issued).not.toBeNull();
   expect(token).toBeDefined();
 
   const output = appOutput();
-  expect(output).not.toContain(config.telegramClientSecret!);
   expect(output).not.toContain(config.sessionSecret);
-  expect(output).not.toContain(issued!.code);
   expect(output).not.toContain(issued!.idToken);
   expect(output).not.toContain(token!);
 });

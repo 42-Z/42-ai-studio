@@ -56,7 +56,6 @@ describe("parseConfig", () => {
       ...validEnv(),
       NODE_ENV: "production",
       TELEGRAM_CLIENT_ID: "123456789",
-      TELEGRAM_CLIENT_SECRET: "secret",
     });
 
     expect(issues).toHaveLength(1);
@@ -151,7 +150,6 @@ function productionEnv(): EnvRecord {
     NODE_ENV: "production",
     APP_URL: "https://studio.example.com",
     TELEGRAM_CLIENT_ID: "123456789",
-    TELEGRAM_CLIENT_SECRET: "secret",
   };
 }
 
@@ -163,31 +161,15 @@ describe("parseConfig: вход через Telegram", () => {
     expect(config.sessionTtlDays).toBe(30);
     expect(config.devLoginEnabled).toBe(false);
     expect(config.telegramClientId).toBeUndefined();
-    expect(config.telegramClientSecret).toBeUndefined();
   });
 
-  test("production без TELEGRAM_CLIENT_ID или TELEGRAM_CLIENT_SECRET отвергается", () => {
-    const noId = productionEnv();
-    delete noId.TELEGRAM_CLIENT_ID;
-    expect(issuesOf(noId)[0]).toContain("TELEGRAM_CLIENT_ID");
+  test("production без TELEGRAM_CLIENT_ID отвергается", () => {
+    const env = productionEnv();
+    delete env.TELEGRAM_CLIENT_ID;
 
-    const noSecret = productionEnv();
-    delete noSecret.TELEGRAM_CLIENT_SECRET;
-    expect(issuesOf(noSecret)[0]).toContain("TELEGRAM_CLIENT_SECRET");
-  });
-
-  test("одна переменная Telegram без другой отвергается вне production", () => {
-    const withId = validEnv();
-    withId.TELEGRAM_CLIENT_ID = "424242";
-    const missingSecret = issuesOf(withId);
-    expect(missingSecret).toHaveLength(1);
-    expect(missingSecret[0]).toContain("TELEGRAM_CLIENT_SECRET");
-
-    const withSecret = validEnv();
-    withSecret.TELEGRAM_CLIENT_SECRET = "secret";
-    const missingId = issuesOf(withSecret);
-    expect(missingId).toHaveLength(1);
-    expect(missingId[0]).toContain("TELEGRAM_CLIENT_ID");
+    const issues = issuesOf(env);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("TELEGRAM_CLIENT_ID");
   });
 
   test("SESSION_SECRET короче 32 символов отвергается", () => {
@@ -261,7 +243,7 @@ describe("parseConfig: вход через Telegram", () => {
   });
 
   test("TELEGRAM_CLIENT_ID состоит только из цифр", () => {
-    const env = { ...validEnv(), TELEGRAM_CLIENT_ID: "abc", TELEGRAM_CLIENT_SECRET: "secret" };
+    const env = { ...validEnv(), TELEGRAM_CLIENT_ID: "abc" };
 
     expect(issuesOf(env)[0]).toContain("TELEGRAM_CLIENT_ID");
   });

@@ -1,10 +1,10 @@
 /**
- * Помощники входа для HTTP-тестов: готовая сессия в базе и полный проход
- * через тестовый издатель OIDC.
+ * Помощники входа для HTTP-тестов: готовая сессия в базе и проход
+ * popup-входа через тестовый издатель OIDC.
  */
 import { eq } from "drizzle-orm";
 
-import { SESSION_COOKIE, OIDC_COOKIE } from "../../../lib/auth/cookies";
+import { SESSION_COOKIE } from "../../../lib/auth/cookies";
 import { createSessionToken, hashSessionToken } from "../../../lib/auth/token";
 import type { User } from "../../../lib/db/schema";
 import { authSessions, users } from "../../../lib/db/schema";
@@ -40,21 +40,19 @@ export async function loginAs(user: User, options: LoginAsOptions = {}): Promise
 }
 
 export interface StartedTelegramLogin {
-  login: Response;
-  oidcCookie: string | null;
-  authorizeUrl: string;
+  nonceResponse: Response;
+  nonce: string;
+  nonceToken: string;
 }
 
-/** Первый шаг входа: получает адрес издателя и cookie `studio_oidc`. */
-export async function beginTelegramLogin(next = "/s"): Promise<StartedTelegramLogin> {
-  const login = await fetchApp(`/api/auth/telegram/login?next=${encodeURIComponent(next)}`);
-  const authorizeUrl = login.headers.get("location");
-  if (authorizeUrl === null) throw new Error("начало входа не вернуло Location");
-  return {
-    login,
-    oidcCookie: cookiePair(login, OIDC_COOKIE),
-    authorizeUrl,
-  };
+/** Первый шаг popup-входа: nonce и подписанный токен для callback. */
+export async function beginTelegramLogin(): Promise<StartedTelegramLogin> {
+  const nonceResponse = await fetchApp("/api/auth/telegram/nonce", { method: "POST" });
+  const body = (await nonceResponse.json()) as { nonce?: unknown; token?: unknown };
+  if (typeof body.nonce !== "string" || typeof body.token !== "string") {
+    throw new Error("сервер не вернул nonce и токен");
+  }
+  return { nonceResponse, nonce: body.nonce, nonceToken: body.token };
 }
 
 export interface LoginViaTelegramResult {
@@ -64,24 +62,21 @@ export interface LoginViaTelegramResult {
 }
 
 /**
- * Проходит вход целиком: приложение → тестовый издатель → callback.
+ * Проходит вход целиком: nonce → тестовый издатель → callback.
  * Профиль задаётся через `telegramStub`; порчу токена тесты выставляют сами.
  */
 export async function loginViaTelegram(
   profile: TelegramProfile = DEFAULT_PROFILE,
-  options: { next?: string } = {},
 ): Promise<LoginViaTelegramResult> {
   await telegramStub.setProfile(profile);
 
-  const start = await beginTelegramLogin(options.next ?? "/s");
+  const start = await beginTelegramLogin();
+  const idToken = await telegramStub.idTokenFor(start.nonce);
 
-  const authorize = await fetch(start.authorizeUrl, { redirect: "manual" });
-  const callbackLocation = authorize.headers.get("location");
-  if (callbackLocation === null) throw new Error("издатель не вернул Location");
-
-  const callback = await fetch(callbackLocation, {
-    redirect: "manual",
-    headers: start.oidcCookie === null ? {} : { cookie: start.oidcCookie },
+  const callback = await fetchApp("/api/auth/telegram/callback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ idToken, nonceToken: start.nonceToken }),
   });
   const cookie = cookiePair(callback, SESSION_COOKIE);
 
@@ -91,5 +86,5 @@ export async function loginViaTelegram(
     .where(eq(users.telegramId, profile.id))
     .limit(1);
 
-  return { steps: [start.login, authorize, callback], cookie, user: user ?? null };
+  return { steps: [start.nonceResponse, callback], cookie, user: user ?? null };
 }

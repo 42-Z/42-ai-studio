@@ -13,20 +13,27 @@ import {
 export type LoginError = "blocked" | "failed" | null;
 
 export interface LoginCardProps {
-  /** Куда вернуться после входа; уже проверенный локальный путь. */
-  next: string;
   telegramEnabled: boolean;
   devLoginEnabled: boolean;
   error: LoginError;
+  /** Открывает popup Telegram; в тестах подменяется шпионом. */
+  onTelegramClick?: () => void;
+  /** Библиотека или nonce ещё не готовы. */
+  telegramBusy?: boolean;
 }
 
 /**
  * Содержимое страницы входа. Отдельный компонент без серверных зависимостей:
  * его отрисовывают тесты без маршрутизатора.
  */
-export function LoginCard({ next, telegramEnabled, devLoginEnabled, error }: LoginCardProps) {
+export function LoginCard({
+  telegramEnabled,
+  devLoginEnabled,
+  error,
+  onTelegramClick,
+  telegramBusy = false,
+}: LoginCardProps) {
   const nothingConfigured = !telegramEnabled && !devLoginEnabled;
-  const telegramHref = `/api/auth/telegram/login?next=${encodeURIComponent(next)}`;
 
   return (
     <Card className="w-full max-w-sm">
@@ -70,8 +77,9 @@ export function LoginCard({ next, telegramEnabled, devLoginEnabled, error }: Log
         <div className="flex flex-col gap-2">
           {telegramEnabled ? (
             <Button
-              render={<a href={telegramHref} />}
-              nativeButton={false}
+              type="button"
+              onClick={onTelegramClick}
+              disabled={telegramBusy}
               size="lg"
               className="w-full"
             >

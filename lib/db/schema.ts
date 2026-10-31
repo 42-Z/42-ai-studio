@@ -35,6 +35,19 @@ export const authSessions = pgTable("auth_sessions", {
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * Одноразовые nonce для popup-входа. В базе лежит SHA-256 значения:
+ * строка удаляется при первом использовании, поэтому повторная пара
+ * «nonce + id_token» уже не пройдёт.
+ */
+export const loginNonces = pgTable("login_nonces", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  nonceHash: text("nonce_hash").notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type AuthSession = typeof authSessions.$inferSelect;
+export type LoginNonce = typeof loginNonces.$inferSelect;

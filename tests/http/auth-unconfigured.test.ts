@@ -1,7 +1,6 @@
 /** Приложение без настроенного Telegram: страница входа и начало потока. */
 import { afterAll, beforeAll, expect, test } from "vitest";
 
-import { loadConfig } from "../../lib/config";
 import { startApp, type AppHandle } from "./support/app";
 
 let app: AppHandle;
@@ -10,7 +9,6 @@ beforeAll(async () => {
   app = await startApp({
     env: {
       TELEGRAM_CLIENT_ID: undefined,
-      TELEGRAM_CLIENT_SECRET: undefined,
       DEV_LOGIN_ENABLED: "0",
     },
   });
@@ -30,11 +28,14 @@ test("страница входа предупреждает, что вход н
   expect(body).not.toContain("Войти как разработчик");
 });
 
-test("начало входа без Telegram ведёт на error=failed", async () => {
-  const response = await fetch(`${app.url}/api/auth/telegram/login?next=%2Fs`, {
+test("начало входа без Telegram отвечает 404", async () => {
+  const response = await fetch(`${app.url}/api/auth/telegram/nonce`, {
+    method: "POST",
     redirect: "manual",
   });
 
-  expect(response.status).toBe(302);
-  expect(response.headers.get("location")).toBe(`${loadConfig().appUrl}/login?error=failed`);
+  expect(response.status).toBe(404);
+  expect(await response.json()).toEqual({
+    error: { code: "not_found", message: "Страница не найдена" },
+  });
 });

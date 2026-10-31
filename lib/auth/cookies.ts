@@ -1,11 +1,6 @@
-/** Имена и атрибуты cookie входа: единственное место, где они заданы. */
+/** Имя и атрибуты cookie сессии входа. */
 
 export const SESSION_COOKIE = "studio_session";
-export const OIDC_COOKIE = "studio_oidc";
-export const OIDC_COOKIE_PATH = "/api/auth/telegram";
-
-/** Срок жизни контейнера входа: 10 минут. */
-export const OIDC_COOKIE_MAX_AGE = 600;
 
 export interface CookieAttributes {
   readonly httpOnly: true;
@@ -32,23 +27,4 @@ export function sessionCookieAttributes(appUrl: string, ttlDays: number): Cookie
     secure: usesSecureCookies(appUrl),
     maxAge: ttlDays * 24 * 60 * 60,
   };
-}
-
-/** Cookie незавершённого входа. */
-export function oidcCookieAttributes(appUrl: string): CookieAttributes {
-  return {
-    httpOnly: true,
-    sameSite: "lax",
-    path: OIDC_COOKIE_PATH,
-    secure: usesSecureCookies(appUrl),
-    maxAge: OIDC_COOKIE_MAX_AGE,
-  };
-}
-
-/**
- * Удаление cookie с тем же путём, что и при установке: `delete()` поставил бы
- * `Path=/`, и cookie на `/api/auth/telegram` осталась бы.
- */
-export function clearedOidcCookieAttributes(appUrl: string): CookieAttributes {
-  return { ...oidcCookieAttributes(appUrl), maxAge: 0 };
 }

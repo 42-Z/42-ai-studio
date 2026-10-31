@@ -1,16 +1,16 @@
 /**
- * Начало входа, полный проход через тестовый издатель и повторный вход.
+ * Начало popup-входа, полный проход через тестовый издатель и повторный вход.
  * Приложение уже запущено глобальной подготовкой.
  */
 import { createHash } from "node:crypto";
 
-import { beforeEach, describe, expect, inject, test } from "vitest";
+import { eq } from "drizzle-orm";
+import { beforeEach, describe, expect, test } from "vitest";
 
 import { sessionCookieAttributes } from "../../lib/auth/cookies";
-import { loadConfig } from "../../lib/config";
 import { authSessions, users } from "../../lib/db/schema";
 import { fetchApp } from "./support/app";
-import { loginViaTelegram } from "./support/auth";
+import { loginAs, loginViaTelegram } from "./support/auth";
 import {
   cookieAttribute,
   hasCookieAttribute,
@@ -26,36 +26,28 @@ beforeEach(async () => {
   await resetDatabase();
 });
 
-describe("GET /api/auth/telegram/login", () => {
-  test("отдаёт 302 с параметрами OIDC и cookie studio_oidc", async () => {
-    const response = await fetchApp("/api/auth/telegram/login?next=%2Fs");
+describe("POST /api/auth/telegram/nonce", () => {
+  test("выдаёт nonce и подписанный токен", async () => {
+    const response = await fetchApp("/api/auth/telegram/nonce", { method: "POST" });
 
-    expect(response.status).toBe(302);
+    expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
+    const body = (await response.json()) as { nonce: string; token: string };
+    expect(body.nonce).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(body.token.split(".")).toHaveLength(3);
+    expect(setCookieHeader(response, "studio_session")).toBeNull();
+  });
 
-    const location = response.headers.get("location");
-    expect(location).not.toBeNull();
-    const config = loadConfig();
-    const authorization = new URL(location!);
-    expect(authorization.origin).toBe(config.telegramOidcIssuer);
-    expect(authorization.pathname).toBe("/auth");
+  test("чужой Origin отвергается", async () => {
+    const response = await fetchApp("/api/auth/telegram/nonce", {
+      method: "POST",
+      headers: { origin: "https://evil.example" },
+    });
 
-    const query = authorization.searchParams;
-    expect(query.get("client_id")).toBe(config.telegramClientId);
-    expect(query.get("redirect_uri")).toBe(`${config.appUrl}/api/auth/telegram/callback`);
-    expect(query.get("response_type")).toBe("code");
-    expect(query.get("scope")).toBe("openid profile");
-    expect(query.get("state")?.length).toBeGreaterThan(0);
-    expect(query.get("nonce")?.length).toBeGreaterThan(0);
-    expect(query.get("code_challenge")?.length).toBe(43);
-    expect(query.get("code_challenge_method")).toBe("S256");
-
-    const cookie = requireSetCookie(response, "studio_oidc");
-    expect(cookieAttribute(cookie, "Path")).toBe("/api/auth/telegram");
-    expect(hasCookieAttribute(cookie, "HttpOnly")).toBe(true);
-    expect(cookieAttribute(cookie, "SameSite")?.toLowerCase()).toBe("lax");
-    expect(Number(cookieAttribute(cookie, "Max-Age"))).toBeLessThanOrEqual(600);
-    expect(hasCookieAttribute(cookie, "Secure")).toBe(false);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: { code: "forbidden", message: "Доступ закрыт" },
+    });
   });
 });
 
@@ -63,19 +55,15 @@ describe("полный вход через тестовый издатель", (
   test("создаёт пользователя и сессию, ставит cookie", async () => {
     const result = await loginViaTelegram();
 
-    const callback = result.steps[2];
-    expect(callback.status).toBe(302);
-    expect(callback.headers.get("location")).toBe(`${inject("appUrl")}/s`);
+    const callback = result.steps[1];
+    expect(callback.status).toBe(200);
+    expect(await callback.json()).toEqual({ ok: true });
 
     const session = requireSetCookie(callback, "studio_session");
     expect(hasCookieAttribute(session, "HttpOnly")).toBe(true);
     expect(cookieAttribute(session, "SameSite")?.toLowerCase()).toBe("lax");
     expect(hasCookieAttribute(session, "Secure")).toBe(false);
     expect(Number(cookieAttribute(session, "Max-Age"))).toBe(30 * 24 * 60 * 60);
-
-    const cleared = requireSetCookie(callback, "studio_oidc");
-    expect(Number(cookieAttribute(cleared, "Max-Age"))).toBe(0);
-    expect(cookieAttribute(cleared, "Path")).toBe("/api/auth/telegram");
 
     expect(result.cookie).not.toBeNull();
     expect(result.user).not.toBeNull();
@@ -134,15 +122,6 @@ describe("полный вход через тестовый издатель", (
     expect(rows.filter((row) => row.telegramId === 4242)).toHaveLength(1);
     expect(rows.filter((row) => row.telegramId === 5151)).toHaveLength(1);
   });
-
-  test("небезопасный next после входа ведёт на /s", async () => {
-    for (const next of ["//evil.example", "https://evil.example", "/\\evil"]) {
-      await telegramStub.reset();
-      const result = await loginViaTelegram(DEFAULT_PROFILE, { next });
-      expect(result.steps[0].status).toBe(302);
-      expect(result.steps[2].headers.get("location")).toBe(`${inject("appUrl")}/s`);
-    }
-  });
 });
 
 describe("атрибуты cookie", () => {
@@ -162,9 +141,32 @@ describe("страница входа", () => {
       "same-origin-allow-popups",
     );
     expect(body).toContain("Вход");
-    expect(body).toContain("/api/auth/telegram/login?next=%2Fs");
     expect(body).toContain("Войти через Telegram");
     expect(body).toContain("Войти как разработчик");
     expect(setCookieHeader(response, "studio_session")).toBeNull();
+  });
+
+  test("вошедшего перенаправляет на next", async () => {
+    const result = await loginViaTelegram();
+    const cookie = await loginAs(result.user!);
+
+    const response = await fetchApp("/login?next=%2Fs%2Fsession-1", { headers: { cookie } });
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("/s/session-1");
+  });
+
+  test("заблокированному показывает сообщение, не перенаправляя", async () => {
+    const result = await loginViaTelegram();
+    await db().update(users).set({ isBlocked: true }).where(eq(users.id, result.user!.id));
+    const cookie = await loginAs(result.user!);
+
+    const response = await fetchApp("/login", { headers: { cookie } });
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(body).toContain(
+      "Доступ к сервису закрыт для этого аккаунта. Если это ошибка, напишите владельцу сервиса.",
+    );
   });
 });
