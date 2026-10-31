@@ -1,6 +1,9 @@
-/** Имя и атрибуты cookie сессии входа. */
+/** Имена и атрибуты cookie сессии и незавершённого входа OIDC. */
+
+import { NONCE_TTL_SECONDS } from "./nonce";
 
 export const SESSION_COOKIE = "studio_session";
+export const OIDC_COOKIE = "studio_oidc";
 
 export interface CookieAttributes {
   readonly httpOnly: true;
@@ -27,4 +30,18 @@ export function sessionCookieAttributes(appUrl: string, ttlDays: number): Cookie
     secure: usesSecureCookies(appUrl),
     maxAge: ttlDays * 24 * 60 * 60,
   };
+}
+
+export function oidcCookieAttributes(appUrl: string): CookieAttributes {
+  return {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/api/auth/telegram",
+    secure: usesSecureCookies(appUrl),
+    maxAge: NONCE_TTL_SECONDS,
+  };
+}
+
+export function clearedOidcCookieAttributes(appUrl: string): CookieAttributes {
+  return { ...oidcCookieAttributes(appUrl), maxAge: 0 };
 }

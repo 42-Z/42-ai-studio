@@ -1,7 +1,7 @@
 import { CodeIcon, SendIcon, TriangleAlertIcon } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -13,13 +13,10 @@ import {
 export type LoginError = "blocked" | "failed" | null;
 
 export interface LoginCardProps {
+  next: string;
   telegramEnabled: boolean;
   devLoginEnabled: boolean;
   error: LoginError;
-  /** Открывает popup Telegram; в тестах подменяется шпионом. */
-  onTelegramClick?: () => void;
-  /** Библиотека или nonce ещё не готовы. */
-  telegramBusy?: boolean;
 }
 
 /**
@@ -27,11 +24,10 @@ export interface LoginCardProps {
  * его отрисовывают тесты без маршрутизатора.
  */
 export function LoginCard({
+  next,
   telegramEnabled,
   devLoginEnabled,
   error,
-  onTelegramClick,
-  telegramBusy = false,
 }: LoginCardProps) {
   const nothingConfigured = !telegramEnabled && !devLoginEnabled;
 
@@ -76,33 +72,23 @@ export function LoginCard({
 
         <div className="flex flex-col gap-2">
           {telegramEnabled ? (
-            <Button
-              type="button"
-              onClick={onTelegramClick}
-              disabled={telegramBusy}
-              size="lg"
-              className="w-full"
+            <a
+              href={`/api/auth/telegram/login?next=${encodeURIComponent(next)}`}
+              className={buttonVariants({ size: "lg", className: "w-full" })}
             >
               <SendIcon data-icon="inline-start" />
               Войти через Telegram
-            </Button>
+            </a>
           ) : null}
 
           {devLoginEnabled ? (
-            <Button
-              render={
-                <a
-                  href={`/api/auth/dev-login?telegramId=1&name=${encodeURIComponent("Разработчик")}`}
-                />
-              }
-              nativeButton={false}
-              variant="outline"
-              size="lg"
-              className="w-full"
+            <a
+              href={`/api/auth/dev-login?telegramId=1&name=${encodeURIComponent("Разработчик")}`}
+              className={buttonVariants({ variant: "outline", size: "lg", className: "w-full" })}
             >
               <CodeIcon data-icon="inline-start" />
               Войти как разработчик
-            </Button>
+            </a>
           ) : null}
         </div>
       </CardContent>

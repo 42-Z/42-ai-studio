@@ -142,21 +142,21 @@ npx shadcn@latest mcp init --client claude   # подключить MCP-серв
 ## Авторизация
 
 - Eve channel закрыт по умолчанию; для production-браузера нужен `agent/channels/eve.ts` с AuthFn.
-- Telegram Login через официальную библиотеку `telegram-login.js`: popup возвращает `id_token`, сервер проверяет подпись и `nonce`.
+- Telegram Login через OIDC Authorization Code Flow с PKCE: обычная навигация в Telegram, обмен кода и проверка `id_token` только на сервере.
 - `id_token` проверять на сервере по JWKS: `iss`, `aud`, `exp`, `iat`, `sub` и `nonce`.
 - Сессия — HttpOnly, Secure, SameSite=Lax cookie.
-- Next.js принимает `id_token` и ставит cookie; eve channel проверяет ту же сессию.
+- Next.js обрабатывает callback и ставит cookie; eve channel проверяет ту же сессию.
 - `localDev()` — только локально; `placeholderAuth()` не должен пускать production.
 - COOP должен разрешать попапы Telegram.
 - Не доверять `id_token` без серверной проверки.
 - Секреты хранить только в `.env*`; в клиентский бандл они не попадают.
-- Переменные входа: `TELEGRAM_CLIENT_ID`, `TELEGRAM_OIDC_ISSUER`, `SESSION_SECRET`, `SESSION_TTL_DAYS`, `DEV_LOGIN_ENABLED`. Проверка конфигурации отвергает production без Client ID, короткий `SESSION_SECRET` и dev-вход вне localhost. Client Secret для popup-входа не нужен.
-- Nonce выдаёт `POST /api/auth/telegram/nonce` вместе с подписанным токеном; `POST /api/auth/telegram/callback` проверяет токен, сверяет nonce с `id_token`, гасит nonce в таблице `login_nonces` и создаёт сессию. Nonce одноразовый.
+- Переменные входа: `TELEGRAM_CLIENT_ID`, `TELEGRAM_CLIENT_SECRET`, `TELEGRAM_OIDC_ISSUER`, `SESSION_SECRET`, `SESSION_TTL_DAYS`, `DEV_LOGIN_ENABLED`. Client ID и Client Secret задаются вместе и обязательны в production. Короткий `SESSION_SECRET` и dev-вход вне localhost запрещены.
+- `GET /api/auth/telegram/login` сохраняет `{state, nonce, verifier, next}` в подписанной HS256-cookie `studio_oidc` на 10 минут с путём `/api/auth/telegram`. `GET /api/auth/telegram/callback` проверяет cookie и state, обменивает код, проверяет JWT и nonce, атомарно гасит nonce в `login_nonces` и создаёт сессию. Временную cookie очищать с тем же путём и `Max-Age=0` при любом исходе.
 - Вход проверяется только на сервере и только по базе: страницы — `requireUser(path)`, обработчики маршрутов — `requireApiUser(request)`. Cookie без строки `auth_sessions` ничего не значит; блокировка действует со следующего запроса.
 - Маршруты, меняющие данные, проверяют `Origin` помощником `checkOrigin`: чужой origin — 403, отсутствие заголовка — пропуск.
 - `id_token` проверяется библиотекой `jose` по discovery-документу издателя: `RS256`, `iss`, `aud`, `exp`, `iat`, `sub` и строгий `nonce`. Другие алгоритмы запрещены.
 - `GET /eve/v1/info` доступен только оператору; остальные маршруты eve — любому вошедшему пользователю. Тела отказов eve имеют его собственный формат `{ok, code, error}`.
-- Все ответы приложения отдают `Cross-Origin-Opener-Policy: same-origin-allow-popups`: `telegram-login.js` общается с Telegram через popup.
+- Все ответы приложения отдают `Cross-Origin-Opener-Policy: same-origin-allow-popups`; текущий поток идёт редиректами, политика сохраняет совместимость с popup-входом.
 - Токены и тела входа не попадают в журнал разработки: маршруты `/api/auth/` исключены из `logging.incomingRequests`.
 
 ## Агент
@@ -222,9 +222,9 @@ u/<user_id>/s/<app_session_id>/<вид>/<uuid>/<имя файла>
 | `fetchApp(path, init?)` | `fetch` к основному экземпляру; `path` относителен `appUrl`; редиректы не выполняются (`redirect: "manual"`) |
 | `appOutput()` | весь вывод (stdout и stderr) основного экземпляра за время тестов, включая строки eve с префиксом `[eve:dev]`, которые `withEve()` перепечатывает в вывод родителя; глобальная подготовка пишет его в файл `.tmp/http-test-app.log` (каталог `.tmp/` в `.gitignore`), помощник читает файл. Нужен, чтобы тесты проверяли отсутствие секретов в журнале |
 | `loginAs(user, options?)` | вставляет строку `auth_sessions` с известным токеном и возвращает `studio_session=<токен>`; `options.expired: true` создаёт просроченную сессию |
-| `loginViaTelegram(profile?)` | задаёт профиль через `telegramStub`, получает `nonce`, выдаёт у тестового издателя `id_token` и отправляет его в callback; возвращает `{ steps, cookie, user }` |
-| `telegramStub` | управляет тестовым издателем: `setProfile(profile)`, `tamper(kind)`, `idTokenFor(nonce)`, `reset()` (вызывать в `beforeEach`), `lastIssued()` |
-| тестовый издатель OIDC | `tests/http/support/oidc-issuer.ts` слушает порт из `TELEGRAM_OIDC_ISSUER`, поднимается глобальной подготовкой один раз; JWKS, `iss`, `aud`, `nonce` и подпись `id_token` проверяются по-настоящему, состояние меняется через `POST /__control` и `POST /__token` только с loopback |
+| `loginViaTelegram(profile?, { next }?)` | задаёт профиль через `telegramStub`, проходит редиректы начала входа, издателя и callback; возвращает `{ steps, cookie, user }`, callback — `steps[2]` |
+| `telegramStub` | управляет тестовым издателем: `setProfile(profile)`, `tamper(kind)`, `authorize("approve" \| "deny")`, `reset()` (вызывать в `beforeEach`), `lastIssued()` |
+| тестовый издатель OIDC | `tests/http/support/oidc-issuer.ts` слушает порт из `TELEGRAM_OIDC_ISSUER`, поднимается глобальной подготовкой один раз; `/auth` и одноразовый `/token` проверяют Basic, redirect URI и PKCE; JWT и nonce проверяются по-настоящему. Состояние меняется через `POST /__control` только с loopback |
 | `db()` | клиент Drizzle к тестовой базе (клиент приложения, один пул на процесс воркера; после файла закрывается) |
 | `resetDatabase()` | `TRUNCATE … CASCADE` всех таблиц схемы `public`, кроме служебных таблиц drizzle; вызывается автоматически перед каждым тестовым файлом (`setupFiles`) |
 | `createUser(overrides?)` | вставляет строку `users` (по умолчанию уникальные `telegram_id` и `name`, оба флага false) и возвращает её |

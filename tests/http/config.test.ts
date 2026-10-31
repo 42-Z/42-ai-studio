@@ -56,6 +56,7 @@ describe("parseConfig", () => {
       ...validEnv(),
       NODE_ENV: "production",
       TELEGRAM_CLIENT_ID: "123456789",
+      TELEGRAM_CLIENT_SECRET: "test-client-secret",
     });
 
     expect(issues).toHaveLength(1);
@@ -150,6 +151,7 @@ function productionEnv(): EnvRecord {
     NODE_ENV: "production",
     APP_URL: "https://studio.example.com",
     TELEGRAM_CLIENT_ID: "123456789",
+    TELEGRAM_CLIENT_SECRET: "test-client-secret",
   };
 }
 
@@ -163,13 +165,23 @@ describe("parseConfig: вход через Telegram", () => {
     expect(config.telegramClientId).toBeUndefined();
   });
 
-  test("production без TELEGRAM_CLIENT_ID отвергается", () => {
+  test.each(["TELEGRAM_CLIENT_ID", "TELEGRAM_CLIENT_SECRET"])("production без %s отвергается", (name) => {
     const env = productionEnv();
-    delete env.TELEGRAM_CLIENT_ID;
+    delete env[name];
 
     const issues = issuesOf(env);
     expect(issues).toHaveLength(1);
-    expect(issues[0]).toContain("TELEGRAM_CLIENT_ID");
+    expect(issues[0]).toContain(name);
+  });
+
+  test.each([
+    { TELEGRAM_CLIENT_ID: "424242", missing: "TELEGRAM_CLIENT_SECRET" },
+    { TELEGRAM_CLIENT_SECRET: "test-client-secret", missing: "TELEGRAM_CLIENT_ID" },
+  ])("частичная настройка Telegram требует $missing", ({ missing, ...telegram }) => {
+    const issues = issuesOf({ ...validEnv(), ...telegram });
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain(missing);
   });
 
   test("SESSION_SECRET короче 32 символов отвергается", () => {

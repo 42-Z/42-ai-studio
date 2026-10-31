@@ -55,9 +55,11 @@ export interface AppConfig {
   readonly nextDistDir: string;
   /** Client ID (Bot ID) из @BotFather; `aud` в `id_token`. */
   readonly telegramClientId: string | undefined;
+  /** Client Secret для серверного обмена кода авторизации. */
+  readonly telegramClientSecret: string | undefined;
   /** Издатель OIDC, от него берётся discovery-документ. */
   readonly telegramOidcIssuer: string;
-  /** Секрет подписи короткоживущего nonce-токена входа. */
+  /** Секрет подписи короткоживущей cookie входа OIDC. */
   readonly sessionSecret: string;
   /** Срок жизни сессии входа в днях. */
   readonly sessionTtlDays: number;
@@ -135,6 +137,7 @@ const envSchema = z.object({
     .string({ error: "ожидается только цифры" })
     .regex(/^\d+$/, "ожидается только цифры")
     .optional(),
+  TELEGRAM_CLIENT_SECRET: envString.optional(),
   TELEGRAM_OIDC_ISSUER: envUrl
     .refine((value) => !value.endsWith("/"), "не должен заканчиваться на /")
     .optional()
@@ -203,9 +206,19 @@ export function parseConfig(env: EnvRecord): AppConfig {
       if (data.TELEGRAM_CLIENT_ID === undefined) {
         addIssue("TELEGRAM_CLIENT_ID", "обязательна при NODE_ENV=production");
       }
+      if (data.TELEGRAM_CLIENT_SECRET === undefined) {
+        addIssue("TELEGRAM_CLIENT_SECRET", "обязательна при NODE_ENV=production");
+      }
       if (data.SESSION_SECRET === EXAMPLE_SESSION_SECRET) {
         addIssue("SESSION_SECRET", "пример из .env.example не годится для production");
       }
+    }
+
+    if (data.TELEGRAM_CLIENT_ID !== undefined && data.TELEGRAM_CLIENT_SECRET === undefined) {
+      addIssue("TELEGRAM_CLIENT_SECRET", "нужна вместе с TELEGRAM_CLIENT_ID");
+    }
+    if (data.TELEGRAM_CLIENT_SECRET !== undefined && data.TELEGRAM_CLIENT_ID === undefined) {
+      addIssue("TELEGRAM_CLIENT_ID", "нужна вместе с TELEGRAM_CLIENT_SECRET");
     }
 
     if (data.DEV_LOGIN_ENABLED && production) {
@@ -239,6 +252,7 @@ export function parseConfig(env: EnvRecord): AppConfig {
     testAppPort: data.TEST_APP_PORT,
     nextDistDir: data.NEXT_DIST_DIR,
     telegramClientId: data.TELEGRAM_CLIENT_ID,
+    telegramClientSecret: data.TELEGRAM_CLIENT_SECRET,
     telegramOidcIssuer: data.TELEGRAM_OIDC_ISSUER,
     sessionSecret: data.SESSION_SECRET,
     sessionTtlDays: data.SESSION_TTL_DAYS,

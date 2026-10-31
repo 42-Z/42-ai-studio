@@ -1,10 +1,9 @@
 import { redirect } from "next/navigation";
 
-import type { LoginError } from "@/components/studio/login-card";
-import { LoginPanel } from "@/components/studio/login-panel";
+import { LoginCard, type LoginError } from "@/components/studio/login-card";
 import { getCurrentUser } from "@/lib/auth/guard";
 import { safeNextPath } from "@/lib/auth/next-path";
-import { telegramLoginScriptUrl } from "@/lib/auth/settings";
+import { oidcSettings } from "@/lib/auth/settings";
 import { loadConfig } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
@@ -29,10 +28,9 @@ export default async function LoginPage({
   const error: LoginError = user?.isBlocked === true ? "blocked" : errorFrom(params.error);
 
   return (
-    <LoginPanel
+    <LoginCard
       next={next}
-      clientId={config.telegramClientId ?? null}
-      scriptUrl={telegramLoginScriptUrl(config)}
+      telegramEnabled={oidcSettings(config) !== null}
       devLoginEnabled={config.devLoginEnabled}
       error={error}
     />

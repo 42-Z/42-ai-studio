@@ -1,11 +1,11 @@
 /**
- * Тестовый издатель OIDC: discovery, JWKS и выдача `id_token` для popup-входа.
+ * Тестовый издатель OIDC: discovery, JWKS, авторизация и токен-эндпоинт.
  *
  * Живёт в процессе глобальной подготовки HTTP-тестов, а сами тесты работают
  * в других процессах, поэтому состояние меняется по HTTP:
- * `POST /__control` (только с loopback) с JSON `{profile, tamper}`,
- * `POST /__token` с `{nonce}` выдаёт подписанный токен.
+ * `POST /__control` (только с loopback) с JSON `{profile, tamper, authorize}`.
  */
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import { SignJWT, exportJWK, exportSPKI, generateKeyPair, type JWK } from "jose";
@@ -30,7 +30,10 @@ export interface TelegramProfile {
 }
 
 export interface OidcIssuerOptions {
+  /** Адрес приложения: сюда издатель возвращает код. */
+  appUrl: string;
   clientId: string;
+  clientSecret: string;
 }
 
 export interface OidcIssuer {
@@ -45,11 +48,20 @@ export const DEFAULT_PROFILE: TelegramProfile = {
   picture: "https://example.com/avatar.png",
 };
 
+interface PendingCode {
+  nonce: string;
+  challenge: string;
+  redirectUri: string;
+  state: string;
+}
+
 interface IssuerState {
   profile: TelegramProfile;
   tamper: TamperKind | null;
-  /** Последний выданный токен: нужен тесту журнала приложения. */
-  last: { idToken: string } | null;
+  authorize: "approve" | "deny";
+  pending: Map<string, PendingCode>;
+  /** Последняя выданная пара: нужна тесту журнала приложения. */
+  last: { code: string; idToken: string } | null;
 }
 
 function randomId(): string {
@@ -66,6 +78,11 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
     "Cache-Control": "no-store",
   });
   response.end(JSON.stringify(body));
+}
+
+function sendRedirect(response: ServerResponse, location: string): void {
+  response.writeHead(302, { Location: location, "Cache-Control": "no-store" });
+  response.end();
 }
 
 function readBody(request: IncomingMessage): Promise<string> {
@@ -115,10 +132,12 @@ export async function startOidcIssuer(
   const state: IssuerState = {
     profile: { ...DEFAULT_PROFILE },
     tamper: null,
+    authorize: "approve",
+    pending: new Map(),
     last: null,
   };
 
-  async function signIdToken(nonce: string | undefined): Promise<string> {
+  async function signIdToken(nonce: string): Promise<string> {
     const now = Math.floor(Date.now() / 1000);
     const payload: Record<string, unknown> = {
       iss: issuer,
@@ -126,13 +145,12 @@ export async function startOidcIssuer(
       sub: `telegram-${state.profile.id}`,
       iat: now,
       exp: now + 600,
+      nonce,
       id: state.profile.id,
       name: state.profile.name,
       preferred_username: state.profile.preferred_username ?? undefined,
       picture: state.profile.picture ?? undefined,
     };
-    if (nonce !== undefined) payload.nonce = nonce;
-
     switch (state.tamper) {
       case "bad_aud":
         payload.aud = "another-client";
@@ -184,11 +202,16 @@ export async function startOidcIssuer(
     const requestUrl = new URL(request.url ?? "/", issuer);
     const path = requestUrl.pathname;
 
-    if (path === "/.well-known/openid-configuration") {
+    if (path === "/.well-known/openid-configuration" && request.method === "GET") {
       sendJson(response, 200, {
         issuer,
+        authorization_endpoint: `${issuer}/auth`,
+        token_endpoint: `${issuer}/token`,
         jwks_uri: `${issuer}/jwks`,
-        response_types_supported: ["code", "post_message"],
+        response_types_supported: ["code"],
+        grant_types_supported: ["authorization_code"],
+        token_endpoint_auth_methods_supported: ["client_secret_basic"],
+        code_challenge_methods_supported: ["S256"],
         subject_types_supported: ["public"],
         id_token_signing_alg_values_supported: ["RS256"],
         scopes_supported: ["openid", "profile"],
@@ -196,21 +219,109 @@ export async function startOidcIssuer(
       return;
     }
 
-    if (path === "/jwks") {
+    if (path === "/jwks" && request.method === "GET") {
       sendJson(response, 200, primary.jwks);
       return;
     }
 
-    if (path === "/__token" && request.method === "POST") {
-      if (!isLoopback(request.socket.remoteAddress)) {
-        response.writeHead(403).end("loopback only");
+    if (path === "/auth" && request.method === "GET") {
+      const query = requestUrl.searchParams;
+      const expectedRedirect = new URL("/api/auth/telegram/callback", options.appUrl).toString();
+
+      if (query.get("client_id") !== options.clientId) {
+        response.writeHead(400).end("bad client_id");
         return;
       }
-      const body = JSON.parse(await readBody(request)) as { nonce?: unknown };
-      const nonce = typeof body.nonce === "string" ? body.nonce : undefined;
-      const idToken = await signIdToken(nonce);
-      state.last = { idToken };
-      sendJson(response, 200, { id_token: idToken });
+      if (query.get("redirect_uri") !== expectedRedirect) {
+        response.writeHead(400).end("bad redirect_uri");
+        return;
+      }
+      if (query.get("response_type") !== "code") {
+        response.writeHead(400).end("bad response_type");
+        return;
+      }
+      if (query.get("scope") !== "openid profile") {
+        response.writeHead(400).end("bad scope");
+        return;
+      }
+      if (query.get("code_challenge_method") !== "S256") {
+        response.writeHead(400).end("bad code_challenge_method");
+        return;
+      }
+      const challenge = query.get("code_challenge");
+      const stateValue = query.get("state");
+      const nonce = query.get("nonce");
+      if (!challenge || !/^[A-Za-z0-9_-]{43}$/.test(challenge) || !stateValue || !nonce) {
+        response.writeHead(400).end("missing or invalid PKCE, state or nonce");
+        return;
+      }
+
+      if (state.authorize === "deny") {
+        const denied = new URL(expectedRedirect);
+        denied.searchParams.set("error", "access_denied");
+        denied.searchParams.set("state", stateValue);
+        sendRedirect(response, denied.toString());
+        return;
+      }
+
+      const code = randomId();
+      const pending = { nonce, challenge, redirectUri: expectedRedirect, state: stateValue };
+      state.pending.set(code, pending);
+      const granted = new URL(pending.redirectUri);
+      granted.searchParams.set("code", code);
+      granted.searchParams.set("state", pending.state);
+      sendRedirect(response, granted.toString());
+      return;
+    }
+
+    if (path === "/token" && request.method === "POST") {
+      const contentType = request.headers["content-type"]?.split(";")[0].trim();
+      if (contentType !== "application/x-www-form-urlencoded") {
+        sendJson(response, 200, { error: "invalid_request" });
+        return;
+      }
+      const form = new URLSearchParams(await readBody(request));
+
+      // Как и у Telegram, ошибки обмена возвращаются в теле HTTP 200.
+      const expected = Buffer.from(
+        `${options.clientId}:${options.clientSecret}`,
+        "utf8",
+      ).toString("base64");
+      if (request.headers.authorization !== `Basic ${expected}`) {
+        sendJson(response, 200, { error: "invalid_client" });
+        return;
+      }
+
+      const code = form.get("code") ?? "";
+      const verifier = form.get("code_verifier") ?? "";
+      const pending = state.pending.get(code);
+      if (
+        pending === undefined ||
+        form.get("grant_type") !== "authorization_code" ||
+        form.get("redirect_uri") !== pending.redirectUri ||
+        form.get("client_id") !== options.clientId ||
+        !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)
+      ) {
+        sendJson(response, 200, { error: "invalid_grant" });
+        return;
+      }
+
+      const digest = createHash("sha256").update(verifier).digest("base64url");
+      if (digest !== pending.challenge) {
+        sendJson(response, 200, { error: "invalid_grant" });
+        return;
+      }
+
+      // Удаляем до подписи: одновременный обмен того же кода тоже не пройдёт.
+      state.pending.delete(code);
+      const idToken = await signIdToken(pending.nonce);
+      state.last = { code, idToken };
+      sendJson(response, 200, {
+        access_token: `access-${randomId()}`,
+        token_type: "Bearer",
+        expires_in: 3600,
+        id_token: idToken,
+      });
       return;
     }
 
@@ -231,16 +342,20 @@ export async function startOidcIssuer(
       const body = JSON.parse(await readBody(request)) as {
         profile?: TelegramProfile;
         tamper?: TamperKind | null;
+        authorize?: "approve" | "deny";
         reset?: boolean;
       };
 
       if (body.reset === true) {
         state.profile = { ...DEFAULT_PROFILE };
         state.tamper = null;
+        state.authorize = "approve";
+        state.pending.clear();
         state.last = null;
       }
       if (body.profile !== undefined) state.profile = body.profile;
       if (body.tamper !== undefined) state.tamper = body.tamper;
+      if (body.authorize !== undefined) state.authorize = body.authorize;
 
       sendJson(response, 200, { ok: true });
       return;

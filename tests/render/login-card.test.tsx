@@ -1,4 +1,4 @@
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { page } from "vitest/browser";
 
 import { LoginCard } from "@/components/studio/login-card";
@@ -10,11 +10,11 @@ function loginCard(props: {
   telegramEnabled: boolean;
   devLoginEnabled: boolean;
   error: "blocked" | "failed" | null;
-  onTelegramClick?: () => void;
+  next?: string;
 }) {
   return (
     <PublicShell>
-      <LoginCard {...props} />
+      <LoginCard next="/s" {...props} />
     </PublicShell>
   );
 }
@@ -29,27 +29,26 @@ test("страница входа показывает заголовок и к�
     .element(page.getByText("Войдите через Telegram, отдельный аккаунт не нужен"))
     .toBeVisible();
   await expect
-    .element(page.getByRole("button", { name: "Войти через Telegram" }))
+    .element(page.getByRole("link", { name: "Войти через Telegram" }))
     .toBeVisible();
   await expect
-    .element(page.getByRole("button", { name: "Войти как разработчик" }))
+    .element(page.getByRole("link", { name: "Войти как разработчик" }))
     .not.toBeInTheDocument();
 });
 
-test("кнопка Telegram вызывает обработчик", async () => {
-  const onTelegramClick = vi.fn();
+test("кнопка Telegram начинает вход обычной ссылкой с путём возврата", async () => {
   await renderOnDesktop(
     loginCard({
       telegramEnabled: true,
       devLoginEnabled: false,
       error: null,
-      onTelegramClick,
+      next: "/s/session-1?tab=video",
     }),
   );
 
-  await page.getByRole("button", { name: "Войти через Telegram" }).click();
-
-  expect(onTelegramClick).toHaveBeenCalledTimes(1);
+  await expect
+    .element(page.getByRole("link", { name: "Войти через Telegram" }))
+    .toHaveAttribute("href", "/api/auth/telegram/login?next=%2Fs%2Fsession-1%3Ftab%3Dvideo");
 });
 
 test("кнопка разработчика видна только при включённом флаге", async () => {
@@ -58,7 +57,7 @@ test("кнопка разработчика видна только при вк�
   );
 
   await expect
-    .element(page.getByRole("button", { name: "Войти как разработчик" }))
+    .element(page.getByRole("link", { name: "Войти как разработчик" }))
     .toHaveAttribute("href", expect.stringContaining("/api/auth/dev-login"));
 });
 

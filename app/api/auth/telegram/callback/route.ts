@@ -1,60 +1,65 @@
 /**
- * POST /api/auth/telegram/callback — браузер приносит `id_token` из popup
- * и подписанный nonce. Сервер проверяет подпись, claims и гасит nonce,
- * создаёт сессию и отдаёт `{ok:true}`.
+ * Возврат из Telegram: cookie и state, обмен кода, JWT и серверная сессия.
+ * Временная cookie очищается при любом исходе.
  */
 import { NextResponse, type NextRequest } from "next/server";
 
-import { SESSION_COOKIE, sessionCookieAttributes } from "@/lib/auth/cookies";
+import {
+  OIDC_COOKIE,
+  SESSION_COOKIE,
+  clearedOidcCookieAttributes,
+  sessionCookieAttributes,
+} from "@/lib/auth/cookies";
 import { checkOrigin } from "@/lib/auth/guard";
 import { logAuthFailure } from "@/lib/auth/log";
-import { consumeLoginNonce } from "@/lib/auth/nonce";
-import {
-  AuthFlowError,
-  authenticateWithIdToken,
-  verifyLoginNonce,
-} from "@/lib/auth/oidc";
+import { safeNextPath } from "@/lib/auth/next-path";
+import { AuthFlowError, completeLogin } from "@/lib/auth/oidc";
+import { redirectResponse } from "@/lib/auth/routes";
 import { requireOidcSettings } from "@/lib/auth/settings";
 import { createUserSession, upsertTelegramUser } from "@/lib/auth/service";
 import { loadConfig } from "@/lib/config";
-import { errorResponse } from "@/lib/http/errors";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(request: NextRequest): Promise<Response> {
+export async function GET(request: NextRequest): Promise<Response> {
   const config = loadConfig();
-
   const originError = checkOrigin(request, config.appUrl);
-  if (originError !== null) return originError;
+  if (originError !== null) {
+    const response = new NextResponse(originError.body, originError);
+    response.cookies.set(OIDC_COOKIE, "", clearedOidcCookieAttributes(config.appUrl));
+    return response;
+  }
+  const redirectAndClear = (path: string): NextResponse => {
+    const response = redirectResponse(config.appUrl, path);
+    response.cookies.set(OIDC_COOKIE, "", clearedOidcCookieAttributes(config.appUrl));
+    return response;
+  };
 
   try {
-    const body = (await request.json()) as { idToken?: unknown; nonceToken?: unknown };
-    const idToken = typeof body.idToken === "string" ? body.idToken : "";
-    const nonceToken = typeof body.nonceToken === "string" ? body.nonceToken : "";
-    if (idToken.length === 0) throw new AuthFlowError("no_id_token");
-    if (nonceToken.length === 0) throw new AuthFlowError("no_nonce");
+    const search = request.nextUrl.searchParams;
+    if (search.has("error")) throw new AuthFlowError("provider_error");
+    const code = search.get("code");
+    const state = search.get("state");
+    if (!code || !state) throw new AuthFlowError("no_code");
+    const containerToken = request.cookies.get(OIDC_COOKIE)?.value;
+    if (!containerToken) throw new AuthFlowError("no_oidc_cookie");
 
-    const nonce = await verifyLoginNonce(nonceToken, config.sessionSecret);
-    const profile = await authenticateWithIdToken(requireOidcSettings(config), {
-      idToken,
-      expectedNonce: nonce,
+    const { profile, next } = await completeLogin(requireOidcSettings(config), {
+      code,
+      state,
+      containerToken,
+      sessionSecret: config.sessionSecret,
     });
-
-    // Nonce одноразовый: погашение атомарно, повторная пара не пройдёт.
-    if (!(await consumeLoginNonce(nonce))) throw new AuthFlowError("bad_nonce");
 
     const result = await upsertTelegramUser(profile);
     if (result.blocked) {
       logAuthFailure("callback", new AuthFlowError("user_blocked"));
-      return errorResponse(403, "user_blocked", "Доступ закрыт");
+      return redirectAndClear("/login?error=blocked");
     }
 
     const sessionToken = await createUserSession(result.user.id, config.sessionTtlDays);
 
-    const response = NextResponse.json(
-      { ok: true },
-      { headers: { "Cache-Control": "no-store" } },
-    );
+    const response = redirectAndClear(safeNextPath(next));
     response.cookies.set(
       SESSION_COOKIE,
       sessionToken,
@@ -63,6 +68,6 @@ export async function POST(request: NextRequest): Promise<Response> {
     return response;
   } catch (error) {
     logAuthFailure("callback", error);
-    return errorResponse(401, "failed", "Не удалось войти");
+    return redirectAndClear("/login?error=failed");
   }
 }

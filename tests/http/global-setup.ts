@@ -63,7 +63,9 @@ export async function setup(project: TestProject): Promise<void> {
   }
 
   oidcIssuer = await startOidcIssuer(config.telegramOidcIssuer, {
+    appUrl: config.appUrl,
     clientId: config.telegramClientId ?? "",
+    clientSecret: config.telegramClientSecret ?? "",
   });
 
   // Журнал предыдущего прогона не должен смешиваться с текущим.

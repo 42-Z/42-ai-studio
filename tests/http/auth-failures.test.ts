@@ -1,34 +1,94 @@
 /**
- * Подделки и сбои popup-входа: 401 `failed`, без cookie сессии и без строки
- * `users`. Nonce одноразовый: повторная пара «nonce + id_token» не проходит.
+ * Отказы OIDC-входа: редирект с ошибкой и очистка временной cookie.
+ * Код и nonce одноразовые, в том числе при одновременных callback.
  */
 import { eq } from "drizzle-orm";
-import { SignJWT } from "jose";
-import { beforeEach, describe, expect, test } from "vitest";
+import { SignJWT, decodeJwt, type JWTPayload } from "jose";
+import { beforeEach, describe, expect, inject, test } from "vitest";
 
 import { loadConfig } from "../../lib/config";
 import { authSessions, users } from "../../lib/db/schema";
 import { fetchApp } from "./support/app";
-import { beginTelegramLogin, loginViaTelegram } from "./support/auth";
-import { setCookieHeader } from "./support/cookies";
+import {
+  beginTelegramLogin,
+  loginViaTelegram,
+  type StartedTelegramLogin,
+} from "./support/auth";
+import {
+  cookieAttribute,
+  cookiePair,
+  hasCookieAttribute,
+  requireSetCookie,
+  setCookieHeader,
+} from "./support/cookies";
 import { createUser, db, resetDatabase, userCount } from "./support/db";
-import type { TamperKind } from "./support/oidc-issuer";
+import { DEFAULT_PROFILE, type TamperKind } from "./support/oidc-issuer";
 import { telegramStub } from "./support/telegram";
 
-async function expectFailed(response: Response): Promise<void> {
-  expect(response.status).toBe(401);
-  expect(await response.json()).toEqual({
-    error: { code: "failed", message: "Не удалось войти" },
-  });
-  expect(setCookieHeader(response, "studio_session")).toBeNull();
+function expectOidcCleared(response: Response): void {
+  const cleared = requireSetCookie(response, "studio_oidc");
+  expect(cleared.startsWith("studio_oidc=;")).toBe(true);
+  expect(cookieAttribute(cleared, "Max-Age")).toBe("0");
+  expect(cookieAttribute(cleared, "Path")).toBe("/api/auth/telegram");
+  expect(hasCookieAttribute(cleared, "HttpOnly")).toBe(true);
+  expect(cookieAttribute(cleared, "SameSite")?.toLowerCase()).toBe("lax");
 }
 
-function postCallback(body: Record<string, unknown>): Promise<Response> {
-  return fetchApp("/api/auth/telegram/callback", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+function expectRejected(response: Response, error: "failed" | "blocked" = "failed"): void {
+  expect(response.status).toBe(302);
+  expect(response.headers.get("location")).toBe(`${inject("appUrl")}/login?error=${error}`);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(setCookieHeader(response, "studio_session")).toBeNull();
+  expectOidcCleared(response);
+}
+
+function expectSuccessful(response: Response): void {
+  expect(response.status).toBe(302);
+  expect(response.headers.get("location")).toBe(`${inject("appUrl")}/s`);
+  expect(cookiePair(response, "studio_session")).not.toBeNull();
+  expectOidcCleared(response);
+}
+
+function getCallback(url: URL, cookie?: string): Promise<Response> {
+  return fetch(url, {
+    redirect: "manual",
+    headers: cookie === undefined ? {} : { cookie },
   });
+}
+
+async function callbackUrlFromIssuer(
+  start?: StartedTelegramLogin,
+): Promise<{ callbackUrl: URL; oidcCookie: string }> {
+  const login = start ?? (await beginTelegramLogin());
+  expect(login.login.status).toBe(302);
+  if (login.oidcCookie === null) throw new Error("начало входа не выдало studio_oidc");
+  const authorize = await fetch(login.authorizeUrl, { redirect: "manual" });
+  expect(authorize.status).toBe(302);
+  const location = authorize.headers.get("location");
+  if (location === null) throw new Error("издатель не вернул Location");
+  const callbackUrl = new URL(location);
+  if (!callbackUrl.searchParams.get("code")) throw new Error("издатель не выдал код");
+  return { callbackUrl, oidcCookie: login.oidcCookie };
+}
+
+/** Меняет только нужный claim настоящей cookie, сохраняя state, nonce и PKCE. */
+async function changeContainer(
+  cookie: string,
+  change: (payload: JWTPayload) => void,
+  foreignKey = false,
+): Promise<string> {
+  const payload = decodeJwt(cookie.slice("studio_oidc=".length));
+  change(payload);
+  const secret = foreignKey ? "foreign-test-session-secret-0123456789" : loadConfig().sessionSecret;
+  const token = await new SignJWT(payload)
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .sign(new TextEncoder().encode(secret));
+  return `studio_oidc=${token}`;
+}
+
+async function expectNoLoginData(): Promise<void> {
+  expect(await userCount()).toBe(0);
+  expect(await db().select().from(authSessions)).toHaveLength(0);
 }
 
 beforeEach(async () => {
@@ -55,127 +115,220 @@ describe("порча id_token", () => {
 
     const result = await loginViaTelegram();
 
-    await expectFailed(result.steps[1]);
+    expectRejected(result.steps[2]);
     expect(result.cookie).toBeNull();
-    expect(await userCount()).toBe(0);
-    expect(await db().select().from(authSessions)).toHaveLength(0);
+    await expectNoLoginData();
   });
 });
 
-describe("токен nonce", () => {
-  test("без nonce-токена вход не удаётся", async () => {
-    const start = await beginTelegramLogin();
-    const idToken = await telegramStub.idTokenFor(start.nonce);
+describe("cookie studio_oidc и state", () => {
+  test("чужой state отвергается", async () => {
+    const { callbackUrl, oidcCookie } = await callbackUrlFromIssuer();
+    callbackUrl.searchParams.set("state", "подменённый-state");
 
-    const response = await postCallback({ idToken });
+    const response = await getCallback(callbackUrl, oidcCookie);
 
-    await expectFailed(response);
-    expect(await userCount()).toBe(0);
+    expectRejected(response);
+    await expectNoLoginData();
   });
 
-  test("подделанный nonce-токен отвергается", async () => {
-    const start = await beginTelegramLogin();
-    const idToken = await telegramStub.idTokenFor(start.nonce);
+  test("без cookie studio_oidc вход не удаётся", async () => {
+    const { callbackUrl } = await callbackUrlFromIssuer();
 
-    const response = await postCallback({ idToken, nonceToken: "not-a-jwt" });
+    const response = await getCallback(callbackUrl);
 
-    await expectFailed(response);
-    expect(await userCount()).toBe(0);
+    expectRejected(response);
+    await expectNoLoginData();
   });
 
-  test("просроченный nonce-токен отвергается", async () => {
-    const start = await beginTelegramLogin();
-    const idToken = await telegramStub.idTokenFor(start.nonce);
-    const secret = new TextEncoder().encode(loadConfig().sessionSecret);
-    const expired = await new SignJWT({ nonce: start.nonce })
-      .setProtectedHeader({ alg: "HS256" })
-      .setIssuedAt(Math.floor(Date.now() / 1000) - 3600)
-      .setExpirationTime(Math.floor(Date.now() / 1000) - 60)
-      .sign(secret);
+  test("повреждённая cookie studio_oidc отвергается", async () => {
+    const { callbackUrl } = await callbackUrlFromIssuer();
 
-    const response = await postCallback({ idToken, nonceToken: expired });
+    const response = await getCallback(callbackUrl, "studio_oidc=not-a-jwt");
 
-    await expectFailed(response);
-    expect(await userCount()).toBe(0);
+    expectRejected(response);
+    await expectNoLoginData();
   });
 
-  test("чужой nonce отвергается", async () => {
-    const start = await beginTelegramLogin();
-    const idToken = await telegramStub.idTokenFor("другой-nonce");
+  test("cookie с чужой подписью отвергается", async () => {
+    const { callbackUrl, oidcCookie } = await callbackUrlFromIssuer();
+    const forged = await changeContainer(oidcCookie, () => {}, true);
 
-    const response = await postCallback({
-      idToken,
-      nonceToken: start.nonceToken,
+    const response = await getCallback(callbackUrl, forged);
+
+    expectRejected(response);
+    await expectNoLoginData();
+  });
+
+  test("просроченная cookie studio_oidc отвергается", async () => {
+    const { callbackUrl, oidcCookie } = await callbackUrlFromIssuer();
+    const expired = await changeContainer(oidcCookie, (payload) => {
+      const now = Math.floor(Date.now() / 1000);
+      payload.iat = now - 120;
+      payload.exp = now - 60;
     });
 
-    await expectFailed(response);
-    expect(await userCount()).toBe(0);
+    const response = await getCallback(callbackUrl, expired);
+
+    expectRejected(response);
+    await expectNoLoginData();
+  });
+
+  test.each(["exp", "iat"] as const)("cookie без %s отвергается", async (claim) => {
+    const { callbackUrl, oidcCookie } = await callbackUrlFromIssuer();
+    const incomplete = await changeContainer(oidcCookie, (payload) => {
+      delete payload[claim];
+    });
+
+    const response = await getCallback(callbackUrl, incomplete);
+
+    expectRejected(response);
+    await expectNoLoginData();
   });
 });
 
-describe("тело запроса", () => {
-  test("без id_token вход не удаётся", async () => {
-    const start = await beginTelegramLogin();
+describe("отказ издателя и параметры callback", () => {
+  test("чужой Origin не создаёт сессию и очищает временную cookie", async () => {
+    const { callbackUrl, oidcCookie } = await callbackUrlFromIssuer();
+    const response = await fetch(callbackUrl, {
+      redirect: "manual",
+      headers: { cookie: oidcCookie, origin: "https://evil.example" },
+    });
 
-    const response = await postCallback({ nonceToken: start.nonceToken });
-
-    await expectFailed(response);
-    expect(await userCount()).toBe(0);
+    expect(response.status).toBe(403);
+    expectOidcCleared(response);
+    expect(setCookieHeader(response, "studio_session")).toBeNull();
+    await expectNoLoginData();
   });
 
-  test("id_token не строка — вход не удаётся", async () => {
-    const start = await beginTelegramLogin();
+  test("отказ пользователя у издателя даёт error=failed", async () => {
+    await telegramStub.authorize("deny");
 
-    const response = await postCallback({ idToken: 123, nonceToken: start.nonceToken });
+    const result = await loginViaTelegram();
 
-    await expectFailed(response);
-    expect(await userCount()).toBe(0);
+    expectRejected(result.steps[2]);
+    await expectNoLoginData();
+  });
+
+  test.each(["code", "state"])("без параметра %s вход не удаётся", async (parameter) => {
+    const { callbackUrl, oidcCookie } = await callbackUrlFromIssuer();
+    callbackUrl.searchParams.delete(parameter);
+
+    const response = await getCallback(callbackUrl, oidcCookie);
+
+    expectRejected(response);
+    await expectNoLoginData();
+  });
+
+  test("пустой параметр error тоже считается отказом", async () => {
+    const { callbackUrl, oidcCookie } = await callbackUrlFromIssuer();
+    callbackUrl.searchParams.set("error", "");
+
+    const response = await getCallback(callbackUrl, oidcCookie);
+
+    expectRejected(response);
+    await expectNoLoginData();
   });
 });
 
-describe("одноразовый nonce", () => {
-  test("повторная пара nonce и id_token не создаёт вторую сессию", async () => {
-    const start = await beginTelegramLogin();
-    const idToken = await telegramStub.idTokenFor(start.nonce);
-    const body = { idToken, nonceToken: start.nonceToken };
+describe("одноразовые code и nonce", () => {
+  test("повторное использование code не создаёт вторую сессию", async () => {
+    const { callbackUrl, oidcCookie } = await callbackUrlFromIssuer();
 
-    const first = await postCallback(body);
-    expect(first.status).toBe(200);
+    const first = await getCallback(callbackUrl, oidcCookie);
+    expectSuccessful(first);
 
-    const second = await postCallback(body);
+    const second = await getCallback(callbackUrl, oidcCookie);
 
-    await expectFailed(second);
+    expectRejected(second);
     expect(await userCount()).toBe(1);
     expect(await db().select().from(authSessions)).toHaveLength(1);
   });
 
-  test("из двух одновременных callback проходит только один", async () => {
+  test("новый code с уже погашенным nonce не создаёт вторую сессию", async () => {
     const start = await beginTelegramLogin();
-    const idToken = await telegramStub.idTokenFor(start.nonce);
-    const body = { idToken, nonceToken: start.nonceToken };
+    const first = await callbackUrlFromIssuer(start);
+    const second = await callbackUrlFromIssuer(start);
+    expect(first.callbackUrl.searchParams.get("code") === second.callbackUrl.searchParams.get("code"))
+      .toBe(false);
 
-    const responses = await Promise.all([postCallback(body), postCallback(body)]);
+    expectSuccessful(await getCallback(first.callbackUrl, first.oidcCookie));
+    expectRejected(await getCallback(second.callbackUrl, second.oidcCookie));
 
-    expect(responses.map((response) => response.status).sort()).toEqual([200, 401]);
+    expect(await userCount()).toBe(1);
     expect(await db().select().from(authSessions)).toHaveLength(1);
   });
+
+  test.each(["одним code", "разными code"])(
+    "из двух одновременных callback с %s и одним nonce проходит только один",
+    async (mode) => {
+      const start = await beginTelegramLogin();
+      const first = await callbackUrlFromIssuer(start);
+      const second = mode === "одним code" ? first : await callbackUrlFromIssuer(start);
+      if (mode === "разными code") {
+        expect(first.callbackUrl.searchParams.get("code") === second.callbackUrl.searchParams.get("code"))
+          .toBe(false);
+      }
+
+      const responses = await Promise.all([
+        getCallback(first.callbackUrl, first.oidcCookie),
+        getCallback(second.callbackUrl, second.oidcCookie),
+      ]);
+
+      expect(responses.map((response) => response.headers.get("location")).sort()).toEqual([
+        `${inject("appUrl")}/login?error=failed`,
+        `${inject("appUrl")}/s`,
+      ]);
+      for (const response of responses) {
+        if (response.headers.get("location") === `${inject("appUrl")}/s`) {
+          expectSuccessful(response);
+        } else {
+          expectRejected(response);
+        }
+      }
+      expect(await userCount()).toBe(1);
+      expect(await db().select().from(authSessions)).toHaveLength(1);
+    },
+  );
 });
 
 describe("заблокированный пользователь", () => {
-  test("callback отвечает 403 user_blocked и не создаёт сессию", async () => {
-    const user = await createUser({ telegramId: 4242, name: "Заблокированный" });
-    await db().update(users).set({ isBlocked: true }).where(eq(users.id, user.id));
+  test("callback ведёт на error=blocked без сессии и изменения профиля", async () => {
+    const user = await createUser({
+      telegramId: DEFAULT_PROFILE.id,
+      name: "Сохранённое имя",
+      username: "stored_user",
+      photoUrl: "https://example.com/stored-avatar.png",
+      isBlocked: true,
+      lastLoginAt: new Date("2026-01-01T00:00:00Z"),
+    });
 
     const result = await loginViaTelegram();
 
-    expect(result.steps[1].status).toBe(403);
-    expect(await result.steps[1].json()).toEqual({
-      error: { code: "user_blocked", message: "Доступ закрыт" },
-    });
+    expectRejected(result.steps[2], "blocked");
     expect(result.cookie).toBeNull();
+    expect(await userCount()).toBe(1);
     expect(await db().select().from(authSessions)).toHaveLength(0);
 
     const [row] = await db().select().from(users).where(eq(users.id, user.id));
-    expect(row.lastLoginAt).toBeNull();
+    expect(row).toEqual(user);
+  });
+});
+
+describe("удалённый popup API", () => {
+  test("POST callback больше не принимает вход", async () => {
+    const response = await fetchApp("/api/auth/telegram/callback", { method: "POST" });
+
+    expect(response.status).toBe(405);
+    expect(setCookieHeader(response, "studio_session")).toBeNull();
+    await expectNoLoginData();
+  });
+
+  test("POST nonce больше не существует", async () => {
+    const response = await fetchApp("/api/auth/telegram/nonce", { method: "POST" });
+
+    expect(response.status).toBe(404);
+    expect(setCookieHeader(response, "studio_session")).toBeNull();
+    await expectNoLoginData();
   });
 });
